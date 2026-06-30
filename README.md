@@ -89,6 +89,29 @@ npm run dev
 
 查询子榜维度通过 `dim_` 前缀传参，例如 `?dim_business_id=community&dim_category_id=tech`。
 
+## DTO 分层与参数绑定
+
+传输层与领域层解耦：
+
+- `internal/dto`：HTTP 请求 / 响应对象，承载 gin 绑定规则（`binding` 标签）、字段校验、Swagger 注解与中文注释，统一响应信封为 `{code, message, data}`。
+- `internal/service`：领域层输入 / 输出，不感知 HTTP 与绑定。
+- `handler`：负责 `dto` ↔ `service` 的显式转换（`ToServiceInput` / `From*`）。
+
+每个请求 / 响应字段均带中文注释；必填与枚举通过 `binding` 标签声明（如 `required`、`oneof`、`dive`）。
+
+## Swagger 文档
+
+启动后端后访问交互式文档：<http://localhost:8080/swagger/index.html>
+
+修改注解后重新生成（需先 `go install github.com/swaggo/swag/cmd/swag@latest`）：
+
+```bash
+cd backend
+swag init -g cmd/api/main.go --parseInternal --parseDependency -o docs
+```
+
+生成产物位于 `backend/docs/`（`swagger.json` / `swagger.yaml` / `docs.go`），已随仓库提交。
+
 ## 测试
 
 ```bash

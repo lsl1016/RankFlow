@@ -5,44 +5,78 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"rankflow/internal/service"
+	"rankflow/internal/dto"
 )
 
-// CreateRank POST /api/ranks
+// CreateRank 创建榜单
+//
+//	@Summary		创建榜单
+//	@Description	按配置创建一个新榜单，返回自动分配的榜单 ID
+//	@Tags			榜单配置
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		dto.CreateRankRequest	true	"榜单配置"
+//	@Success		200		{object}	dto.Response{data=dto.CreateRankData}
+//	@Failure		400		{object}	dto.Response
+//	@Router			/ranks [post]
 func (h *Handler) CreateRank(c *gin.Context) {
-	var in service.CreateRankInput
-	if err := c.ShouldBindJSON(&in); err != nil {
+	var req dto.CreateRankRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, wrapValidation(err))
 		return
 	}
-	id, err := h.svc.CreateRank(c.Request.Context(), &in)
+	id, err := h.svc.CreateRank(c.Request.Context(), req.ToServiceInput())
 	if err != nil {
 		fail(c, err)
 		return
 	}
-	ok(c, gin.H{"rankId": id})
+	ok(c, dto.CreateRankData{RankID: id})
 }
 
-// UpdateRank PUT /api/ranks/:rankId
+// UpdateRank 编辑榜单
+//
+//	@Summary		编辑榜单
+//	@Description	全量更新指定榜单的配置
+//	@Tags			榜单配置
+//	@Accept			json
+//	@Produce		json
+//	@Param			rankId	path		int						true	"榜单 ID"
+//	@Param			body	body		dto.CreateRankRequest	true	"榜单配置"
+//	@Success		200		{object}	dto.Response{data=dto.CreateRankData}
+//	@Failure		400		{object}	dto.Response
+//	@Failure		404		{object}	dto.Response
+//	@Router			/ranks/{rankId} [put]
 func (h *Handler) UpdateRank(c *gin.Context) {
 	rankID, err := pathRankID(c)
 	if err != nil {
 		fail(c, wrapValidation(err))
 		return
 	}
-	var in service.CreateRankInput
-	if err := c.ShouldBindJSON(&in); err != nil {
+	var req dto.CreateRankRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, wrapValidation(err))
 		return
 	}
-	if err := h.svc.UpdateRank(c.Request.Context(), rankID, &in); err != nil {
+	if err := h.svc.UpdateRank(c.Request.Context(), rankID, req.ToServiceInput()); err != nil {
 		fail(c, err)
 		return
 	}
-	ok(c, gin.H{"rankId": rankID})
+	ok(c, dto.CreateRankData{RankID: rankID})
 }
 
-// ListRanks GET /api/ranks
+// ListRanks 榜单列表
+//
+//	@Summary		榜单列表
+//	@Description	按名称 / 业务线 / 状态分页查询榜单
+//	@Tags			榜单配置
+//	@Produce		json
+//	@Param			name		query		string	false	"榜单名称模糊匹配"
+//	@Param			bizCode		query		string	false	"业务线编码"
+//	@Param			status		query		int		false	"状态：0草稿 1上线 2下线 3归档"
+//	@Param			page		query		int		false	"页码，缺省 1"
+//	@Param			size		query		int		false	"每页大小，缺省 20"
+//	@Success		200			{object}	dto.Response{data=dto.RankListData}
+//	@Router			/ranks [get]
 func (h *Handler) ListRanks(c *gin.Context) {
 	name := c.Query("name")
 	bizCode := c.Query("bizCode")
@@ -60,10 +94,19 @@ func (h *Handler) ListRanks(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, gin.H{"total": total, "list": rows, "page": page, "size": size})
+	ok(c, dto.FromRankConfigList(rows, total, page, size))
 }
 
-// GetRank GET /api/ranks/:rankId
+// GetRank 榜单详情
+//
+//	@Summary		榜单详情
+//	@Description	返回榜单基础配置、横向维度与时间维度配置
+//	@Tags			榜单配置
+//	@Produce		json
+//	@Param			rankId	path		int	true	"榜单 ID"
+//	@Success		200		{object}	dto.Response{data=dto.RankDetailData}
+//	@Failure		404		{object}	dto.Response
+//	@Router			/ranks/{rankId} [get]
 func (h *Handler) GetRank(c *gin.Context) {
 	rankID, err := pathRankID(c)
 	if err != nil {
@@ -75,26 +118,36 @@ func (h *Handler) GetRank(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, detail)
+	ok(c, dto.FromResolvedConfig(detail))
 }
 
-// SetStatus POST /api/ranks/:rankId/status  body {status:int}
+// SetStatus 上下线 / 归档
+//
+//	@Summary		榜单上下线 / 归档
+//	@Description	变更榜单状态：0草稿 1上线 2下线 3归档
+//	@Tags			榜单配置
+//	@Accept			json
+//	@Produce		json
+//	@Param			rankId	path		int						true	"榜单 ID"
+//	@Param			body	body		dto.SetStatusRequest	true	"目标状态"
+//	@Success		200		{object}	dto.Response
+//	@Failure		400		{object}	dto.Response
+//	@Failure		404		{object}	dto.Response
+//	@Router			/ranks/{rankId}/status [post]
 func (h *Handler) SetStatus(c *gin.Context) {
 	rankID, err := pathRankID(c)
 	if err != nil {
 		fail(c, wrapValidation(err))
 		return
 	}
-	var body struct {
-		Status int `json:"status"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
+	var req dto.SetStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, wrapValidation(err))
 		return
 	}
-	if err := h.svc.SetStatus(c.Request.Context(), rankID, body.Status); err != nil {
+	if err := h.svc.SetStatus(c.Request.Context(), rankID, req.Status); err != nil {
 		fail(c, err)
 		return
 	}
-	ok(c, gin.H{"rankId": rankID, "status": body.Status})
+	ok(c, gin.H{"rankId": rankID, "status": req.Status})
 }

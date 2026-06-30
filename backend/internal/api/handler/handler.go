@@ -8,15 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"rankflow/internal/dto"
 	"rankflow/internal/observability"
 	"rankflow/internal/service"
 )
-
-// wrapValidation tags a binding/parse error as a validation error so fail()
-// maps it to HTTP 400.
-func wrapValidation(err error) error {
-	return fmt.Errorf("%w: %v", service.ErrValidation, err)
-}
 
 type Handler struct {
 	svc     *service.Service
@@ -27,23 +22,30 @@ func New(svc *service.Service, metrics *observability.Metrics) *Handler {
 	return &Handler{svc: svc, metrics: metrics}
 }
 
-// resp is the unified response envelope {code, message, data}.
-func ok(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": data})
+// wrapValidation tags a binding/parse error as a validation error so fail()
+// maps it to HTTP 400.
+func wrapValidation(err error) error {
+	return fmt.Errorf("%w: %v", service.ErrValidation, err)
 }
 
+// ok writes a unified success response.
+func ok(c *gin.Context, data any) {
+	c.JSON(http.StatusOK, dto.Success(data))
+}
+
+// fail maps a domain error to the appropriate HTTP status + business code and
+// writes a unified failure response.
 func fail(c *gin.Context, err error) {
-	status := http.StatusInternalServerError
-	code := 5000
+	status, code := http.StatusInternalServerError, dto.CodeInternal
 	switch {
 	case errors.Is(err, service.ErrValidation):
-		status, code = http.StatusBadRequest, 4000
+		status, code = http.StatusBadRequest, dto.CodeValidation
 	case errors.Is(err, service.ErrNotFound):
-		status, code = http.StatusNotFound, 4040
+		status, code = http.StatusNotFound, dto.CodeNotFound
 	case errors.Is(err, service.ErrNotOnline):
-		status, code = http.StatusConflict, 4090
+		status, code = http.StatusConflict, dto.CodeConflict
 	}
-	c.JSON(status, gin.H{"code": code, "message": err.Error(), "data": nil})
+	c.JSON(status, dto.Fail(code, err.Error()))
 }
 
 func pathRankID(c *gin.Context) (int64, error) {

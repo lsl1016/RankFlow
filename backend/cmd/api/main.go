@@ -11,6 +11,8 @@ import (
 
 	"go.uber.org/zap"
 
+	_ "rankflow/docs" // 由 swag 生成的 OpenAPI 文档，供 /swagger 路由加载
+
 	"rankflow/internal/api/handler"
 	"rankflow/internal/api/router"
 	"rankflow/internal/config"
@@ -21,6 +23,10 @@ import (
 	"rankflow/internal/store/redis"
 )
 
+// @title			RankFlow 通用榜单服务 API
+// @version		1.0
+// @description	可配置、可复用的榜单基础服务：榜单配置、分数更新、排名查询。
+// @BasePath		/api
 func main() {
 	cfg := config.Load()
 

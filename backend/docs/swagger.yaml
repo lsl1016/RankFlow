@@ -1,0 +1,792 @@
+basePath: /api
+definitions:
+  rankflow_internal_dto.AddScoreRequest:
+    properties:
+      dimensions:
+        additionalProperties:
+          type: string
+        description: 维度取值，键为维度字段名，用于定位子榜 type_id
+        type: object
+      eventTime:
+        description: 事件发生时间（Unix 秒），用于时间桶与同分先后排序；<=0 取当前时间
+        type: integer
+      itemId:
+        description: 上榜对象 ID，必填，如 user_10086
+        type: string
+      requestId:
+        description: 幂等请求 ID（可空）：相同 ID 的重复请求不会重复加分
+        type: string
+      score:
+        description: 分数：加分接口为增量（可负），设置接口为绝对值
+        type: integer
+      subScore:
+        description: 二级排序分：仅当同分策略为 sub_score 时生效
+        type: integer
+    required:
+    - itemId
+    type: object
+  rankflow_internal_dto.BatchAddScoreRequest:
+    properties:
+      items:
+        description: 加分条目列表，至少一条
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.AddScoreRequest'
+        minItems: 1
+        type: array
+    required:
+    - items
+    type: object
+  rankflow_internal_dto.BatchResultData:
+    properties:
+      results:
+        description: 每个条目的写入结果
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.ScoreResultData'
+        type: array
+    type: object
+  rankflow_internal_dto.CreateRankData:
+    properties:
+      rankId:
+        description: 新建榜单的 ID
+        type: integer
+    type: object
+  rankflow_internal_dto.CreateRankRequest:
+    properties:
+      anchorType:
+        description: 时间锚点，缺省 event_time：行为发生时间 / 请求时间
+        enum:
+        - event_time
+        - request_time
+        type: string
+      bizCode:
+        description: 业务线编码，必填，如 content_community
+        type: string
+      cacheTtlSeconds:
+        description: 配置缓存 TTL（秒），<=0 时取默认 3600
+        type: integer
+      dimensions:
+        description: 横向维度列表，按顺序拼接生成 type_id；为空则为全站单榜
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.DimensionItem'
+        type: array
+      endTime:
+        description: 积分结束时间，可空（RFC3339）
+        type: string
+      maxRankSize:
+        description: 榜单最大长度，<=0 时取默认 10000
+        type: integer
+      online:
+        description: 保存后是否立即上线
+        type: boolean
+      rankName:
+        description: 榜单名称，必填，如「创作者月度贡献榜」
+        type: string
+      sameScorePolicy:
+        description: 同分排序策略，缺省 early_first：先到优先 / 后到优先 / 业务二级排序
+        enum:
+        - early_first
+        - late_first
+        - sub_score
+        type: string
+      sortType:
+        description: 排序方向，缺省 score_desc：score_desc 分高靠前 / score_asc 分低靠前
+        enum:
+        - score_desc
+        - score_asc
+        type: string
+      startTime:
+        description: 积分开始时间，可空（RFC3339）
+        type: string
+      targetType:
+        description: 上榜对象类型，必填：user/content/room/product/org
+        enum:
+        - user
+        - content
+        - room
+        - product
+        - org
+        type: string
+      timeType:
+        description: 时间粒度，缺省 none：none/hour/day/week/month/season/custom
+        enum:
+        - none
+        - hour
+        - day
+        - week
+        - month
+        - season
+        - custom
+        type: string
+      timezone:
+        description: 时区，缺省 Asia/Shanghai
+        type: string
+    required:
+    - bizCode
+    - rankName
+    - targetType
+    type: object
+  rankflow_internal_dto.DimensionDTO:
+    properties:
+      dimensionField:
+        description: 维度字段名
+        type: string
+      dimensionName:
+        description: 维度展示名
+        type: string
+      dimensionOrder:
+        description: 拼接顺序
+        type: integer
+      required:
+        description: 是否必填
+        type: boolean
+    type: object
+  rankflow_internal_dto.DimensionItem:
+    properties:
+      dimensionField:
+        description: 维度字段名，参与 type_id 拼接，如 business_id
+        type: string
+      dimensionName:
+        description: 维度展示名，如「业务线」
+        type: string
+      required:
+        description: 是否必填：true 时该维度缺值会拒绝写入
+        type: boolean
+    required:
+    - dimensionField
+    type: object
+  rankflow_internal_dto.MemberRankData:
+    properties:
+      itemId:
+        description: 上榜对象 ID
+        type: string
+      rank:
+        description: 排名（1 基，-1 表示不在榜）
+        type: integer
+      rankId:
+        description: 榜单 ID
+        type: integer
+      score:
+        description: 分数
+        type: number
+      typeId:
+        description: 子榜维度 ID
+        type: string
+    type: object
+  rankflow_internal_dto.RankDTO:
+    properties:
+      bizCode:
+        description: 业务线编码
+        type: string
+      cacheTtlSeconds:
+        description: 配置缓存 TTL（秒）
+        type: integer
+      createdAt:
+        description: 创建时间
+        type: string
+      endTime:
+        description: 积分结束时间
+        type: string
+      maxRankSize:
+        description: 榜单最大长度
+        type: integer
+      rankId:
+        description: 榜单 ID
+        type: integer
+      rankName:
+        description: 榜单名称
+        type: string
+      sameScorePolicy:
+        description: 同分排序策略
+        type: string
+      sortType:
+        description: 排序方向
+        type: string
+      startTime:
+        description: 积分开始时间
+        type: string
+      status:
+        description: 状态：0草稿 1上线 2下线 3归档
+        type: integer
+      targetType:
+        description: 上榜对象类型
+        type: string
+      updatedAt:
+        description: 更新时间
+        type: string
+    type: object
+  rankflow_internal_dto.RankDetailData:
+    properties:
+      config:
+        allOf:
+        - $ref: '#/definitions/rankflow_internal_dto.RankDTO'
+        description: 基础配置
+      dimensions:
+        description: 横向维度列表
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.DimensionDTO'
+        type: array
+      time:
+        allOf:
+        - $ref: '#/definitions/rankflow_internal_dto.TimeConfigDTO'
+        description: 时间维度配置
+    type: object
+  rankflow_internal_dto.RankEntryDTO:
+    properties:
+      itemId:
+        description: 上榜对象 ID
+        type: string
+      rank:
+        description: 排名（1 基）
+        type: integer
+      score:
+        description: 分数
+        type: number
+    type: object
+  rankflow_internal_dto.RankListData:
+    properties:
+      list:
+        description: 当前页数据
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.RankDTO'
+        type: array
+      page:
+        description: 当前页码
+        type: integer
+      size:
+        description: 每页大小
+        type: integer
+      total:
+        description: 总条数
+        type: integer
+    type: object
+  rankflow_internal_dto.Response:
+    properties:
+      code:
+        description: 业务状态码：0 表示成功，非 0 表示失败
+        type: integer
+      data:
+        description: 业务数据载荷：失败时为空
+      message:
+        description: 提示信息：成功为 "success"，失败为错误描述
+        type: string
+    type: object
+  rankflow_internal_dto.ScoreResultData:
+    properties:
+      final:
+        description: 最终排序分（含二级排序小数位）
+        type: number
+      itemId:
+        description: 上榜对象 ID
+        type: string
+      rank:
+        description: 当前排名（1 基，-1 表示不在榜）
+        type: integer
+      rankId:
+        description: 榜单 ID
+        type: integer
+      score:
+        description: 业务真实分数
+        type: integer
+      typeId:
+        description: 子榜维度 ID
+        type: string
+    type: object
+  rankflow_internal_dto.SetStatusRequest:
+    properties:
+      status:
+        description: 目标状态：0草稿 1上线 2下线 3归档
+        enum:
+        - 0
+        - 1
+        - 2
+        - 3
+        type: integer
+    type: object
+  rankflow_internal_dto.StatsData:
+    properties:
+      cacheHitRate:
+        description: 配置缓存命中率（0~1）
+        type: number
+      memberCount:
+        description: 当前成员数
+        type: integer
+      rankId:
+        description: 榜单 ID
+        type: integer
+      readCount:
+        description: 累计读取次数
+        type: integer
+      readQps:
+        description: 读取 QPS（进程内均值）
+        type: number
+      typeId:
+        description: 子榜维度 ID
+        type: string
+      writeCount:
+        description: 累计写入次数
+        type: integer
+      writeQps:
+        description: 写入 QPS（进程内均值）
+        type: number
+    type: object
+  rankflow_internal_dto.TimeConfigDTO:
+    properties:
+      anchorType:
+        description: 时间锚点
+        type: string
+      timeType:
+        description: 时间粒度
+        type: string
+      timezone:
+        description: 时区
+        type: string
+    type: object
+  rankflow_internal_dto.TopResultData:
+    properties:
+      items:
+        description: 排名列表
+        items:
+          $ref: '#/definitions/rankflow_internal_dto.RankEntryDTO'
+        type: array
+      rankId:
+        description: 榜单 ID
+        type: integer
+      total:
+        description: 子榜成员总数
+        type: integer
+      typeId:
+        description: 子榜维度 ID
+        type: string
+    type: object
+info:
+  contact: {}
+  description: 可配置、可复用的榜单基础服务：榜单配置、分数更新、排名查询。
+  title: RankFlow 通用榜单服务 API
+  version: "1.0"
+paths:
+  /ranks:
+    get:
+      description: 按名称 / 业务线 / 状态分页查询榜单
+      parameters:
+      - description: 榜单名称模糊匹配
+        in: query
+        name: name
+        type: string
+      - description: 业务线编码
+        in: query
+        name: bizCode
+        type: string
+      - description: 状态：0草稿 1上线 2下线 3归档
+        in: query
+        name: status
+        type: integer
+      - description: 页码，缺省 1
+        in: query
+        name: page
+        type: integer
+      - description: 每页大小，缺省 20
+        in: query
+        name: size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.RankListData'
+              type: object
+      summary: 榜单列表
+      tags:
+      - 榜单配置
+    post:
+      consumes:
+      - application/json
+      description: 按配置创建一个新榜单，返回自动分配的榜单 ID
+      parameters:
+      - description: 榜单配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.CreateRankRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.CreateRankData'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 创建榜单
+      tags:
+      - 榜单配置
+  /ranks/{rankId}:
+    get:
+      description: 返回榜单基础配置、横向维度与时间维度配置
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.RankDetailData'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 榜单详情
+      tags:
+      - 榜单配置
+    put:
+      consumes:
+      - application/json
+      description: 全量更新指定榜单的配置
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 榜单配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.CreateRankRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.CreateRankData'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 编辑榜单
+      tags:
+      - 榜单配置
+  /ranks/{rankId}/members/{itemId}/around:
+    get:
+      description: 查询指定成员附近的排名（前后窗口）
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 上榜对象 ID
+        in: path
+        name: itemId
+        required: true
+        type: string
+      - description: 时间锚点（Unix 秒）
+        in: query
+        name: timestamp
+        type: integer
+      - description: 向前取多少名，缺省 5
+        in: query
+        name: before
+        type: integer
+      - description: 向后取多少名，缺省 5
+        in: query
+        name: after
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.TopResultData'
+              type: object
+      summary: 周边排名
+      tags:
+      - 榜单查询
+  /ranks/{rankId}/members/{itemId}/rank:
+    get:
+      description: 查询指定成员在子榜中的分数与名次
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 上榜对象 ID
+        in: path
+        name: itemId
+        required: true
+        type: string
+      - description: 时间锚点（Unix 秒）
+        in: query
+        name: timestamp
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.MemberRankData'
+              type: object
+      summary: 我的排名
+      tags:
+      - 榜单查询
+  /ranks/{rankId}/score/add:
+    post:
+      consumes:
+      - application/json
+      description: 对成员累加分数（增量，可负），支持 requestId 幂等
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 加分参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.AddScoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.ScoreResultData'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 加分
+      tags:
+      - 分数更新
+  /ranks/{rankId}/score/batch:
+    post:
+      consumes:
+      - application/json
+      description: 一次提交多条加分请求，逐条处理
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 批量加分参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.BatchAddScoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.BatchResultData'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 批量加分
+      tags:
+      - 分数更新
+  /ranks/{rankId}/score/set:
+    post:
+      consumes:
+      - application/json
+      description: 将成员分数设置为绝对值
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 设置参数（score 为绝对值）
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.AddScoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.ScoreResultData'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 设置分数
+      tags:
+      - 分数更新
+  /ranks/{rankId}/stats:
+    get:
+      description: 返回子榜成员数与进程级 QPS / 缓存命中率指标
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 时间锚点（Unix 秒）
+        in: query
+        name: timestamp
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.StatsData'
+              type: object
+      summary: 实时概览
+      tags:
+      - 榜单查询
+  /ranks/{rankId}/status:
+    post:
+      consumes:
+      - application/json
+      description: 变更榜单状态：0草稿 1上线 2下线 3归档
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 目标状态
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/rankflow_internal_dto.SetStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rankflow_internal_dto.Response'
+      summary: 榜单上下线 / 归档
+      tags:
+      - 榜单配置
+  /ranks/{rankId}/top:
+    get:
+      description: 分页查询榜单排名；子榜维度通过 dim_ 前缀传参，如 dim_business_id=community
+      parameters:
+      - description: 榜单 ID
+        in: path
+        name: rankId
+        required: true
+        type: integer
+      - description: 时间锚点（Unix 秒），<=0 取当前时间
+        in: query
+        name: timestamp
+        type: integer
+      - description: 起始偏移，缺省 0
+        in: query
+        name: offset
+        type: integer
+      - description: 返回条数，缺省 100，上限 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/rankflow_internal_dto.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/rankflow_internal_dto.TopResultData'
+              type: object
+      summary: TopN 查询
+      tags:
+      - 榜单查询
+swagger: "2.0"

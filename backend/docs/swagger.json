@@ -1,0 +1,1206 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "可配置、可复用的榜单基础服务：榜单配置、分数更新、排名查询。",
+        "title": "RankFlow 通用榜单服务 API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "basePath": "/api",
+    "paths": {
+        "/ranks": {
+            "get": {
+                "description": "按名称 / 业务线 / 状态分页查询榜单",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单配置"
+                ],
+                "summary": "榜单列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "榜单名称模糊匹配",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "业务线编码",
+                        "name": "bizCode",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "状态：0草稿 1上线 2下线 3归档",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码，缺省 1",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页大小，缺省 20",
+                        "name": "size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.RankListData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "按配置创建一个新榜单，返回自动分配的榜单 ID",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单配置"
+                ],
+                "summary": "创建榜单",
+                "parameters": [
+                    {
+                        "description": "榜单配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.CreateRankRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.CreateRankData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}": {
+            "get": {
+                "description": "返回榜单基础配置、横向维度与时间维度配置",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单配置"
+                ],
+                "summary": "榜单详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.RankDetailData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "全量更新指定榜单的配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单配置"
+                ],
+                "summary": "编辑榜单",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "榜单配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.CreateRankRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.CreateRankData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/members/{itemId}/around": {
+            "get": {
+                "description": "查询指定成员附近的排名（前后窗口）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单查询"
+                ],
+                "summary": "周边排名",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "上榜对象 ID",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "时间锚点（Unix 秒）",
+                        "name": "timestamp",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "向前取多少名，缺省 5",
+                        "name": "before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "向后取多少名，缺省 5",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.TopResultData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/members/{itemId}/rank": {
+            "get": {
+                "description": "查询指定成员在子榜中的分数与名次",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单查询"
+                ],
+                "summary": "我的排名",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "上榜对象 ID",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "时间锚点（Unix 秒）",
+                        "name": "timestamp",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.MemberRankData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/score/add": {
+            "post": {
+                "description": "对成员累加分数（增量，可负），支持 requestId 幂等",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "分数更新"
+                ],
+                "summary": "加分",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "加分参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.AddScoreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.ScoreResultData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/score/batch": {
+            "post": {
+                "description": "一次提交多条加分请求，逐条处理",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "分数更新"
+                ],
+                "summary": "批量加分",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "批量加分参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.BatchAddScoreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.BatchResultData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/score/set": {
+            "post": {
+                "description": "将成员分数设置为绝对值",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "分数更新"
+                ],
+                "summary": "设置分数",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "设置参数（score 为绝对值）",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.AddScoreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.ScoreResultData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/stats": {
+            "get": {
+                "description": "返回子榜成员数与进程级 QPS / 缓存命中率指标",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单查询"
+                ],
+                "summary": "实时概览",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "时间锚点（Unix 秒）",
+                        "name": "timestamp",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.StatsData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/status": {
+            "post": {
+                "description": "变更榜单状态：0草稿 1上线 2下线 3归档",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单配置"
+                ],
+                "summary": "榜单上下线 / 归档",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "目标状态",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.SetStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/rankflow_internal_dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/ranks/{rankId}/top": {
+            "get": {
+                "description": "分页查询榜单排名；子榜维度通过 dim_ 前缀传参，如 dim_business_id=community",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "榜单查询"
+                ],
+                "summary": "TopN 查询",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "榜单 ID",
+                        "name": "rankId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "时间锚点（Unix 秒），\u003c=0 取当前时间",
+                        "name": "timestamp",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "起始偏移，缺省 0",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "返回条数，缺省 100，上限 500",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/rankflow_internal_dto.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rankflow_internal_dto.TopResultData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "rankflow_internal_dto.AddScoreRequest": {
+            "type": "object",
+            "required": [
+                "itemId"
+            ],
+            "properties": {
+                "dimensions": {
+                    "description": "维度取值，键为维度字段名，用于定位子榜 type_id",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "eventTime": {
+                    "description": "事件发生时间（Unix 秒），用于时间桶与同分先后排序；\u003c=0 取当前时间",
+                    "type": "integer"
+                },
+                "itemId": {
+                    "description": "上榜对象 ID，必填，如 user_10086",
+                    "type": "string"
+                },
+                "requestId": {
+                    "description": "幂等请求 ID（可空）：相同 ID 的重复请求不会重复加分",
+                    "type": "string"
+                },
+                "score": {
+                    "description": "分数：加分接口为增量（可负），设置接口为绝对值",
+                    "type": "integer"
+                },
+                "subScore": {
+                    "description": "二级排序分：仅当同分策略为 sub_score 时生效",
+                    "type": "integer"
+                }
+            }
+        },
+        "rankflow_internal_dto.BatchAddScoreRequest": {
+            "type": "object",
+            "required": [
+                "items"
+            ],
+            "properties": {
+                "items": {
+                    "description": "加分条目列表，至少一条",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.AddScoreRequest"
+                    }
+                }
+            }
+        },
+        "rankflow_internal_dto.BatchResultData": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "description": "每个条目的写入结果",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.ScoreResultData"
+                    }
+                }
+            }
+        },
+        "rankflow_internal_dto.CreateRankData": {
+            "type": "object",
+            "properties": {
+                "rankId": {
+                    "description": "新建榜单的 ID",
+                    "type": "integer"
+                }
+            }
+        },
+        "rankflow_internal_dto.CreateRankRequest": {
+            "type": "object",
+            "required": [
+                "bizCode",
+                "rankName",
+                "targetType"
+            ],
+            "properties": {
+                "anchorType": {
+                    "description": "时间锚点，缺省 event_time：行为发生时间 / 请求时间",
+                    "type": "string",
+                    "enum": [
+                        "event_time",
+                        "request_time"
+                    ]
+                },
+                "bizCode": {
+                    "description": "业务线编码，必填，如 content_community",
+                    "type": "string"
+                },
+                "cacheTtlSeconds": {
+                    "description": "配置缓存 TTL（秒），\u003c=0 时取默认 3600",
+                    "type": "integer"
+                },
+                "dimensions": {
+                    "description": "横向维度列表，按顺序拼接生成 type_id；为空则为全站单榜",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.DimensionItem"
+                    }
+                },
+                "endTime": {
+                    "description": "积分结束时间，可空（RFC3339）",
+                    "type": "string"
+                },
+                "maxRankSize": {
+                    "description": "榜单最大长度，\u003c=0 时取默认 10000",
+                    "type": "integer"
+                },
+                "online": {
+                    "description": "保存后是否立即上线",
+                    "type": "boolean"
+                },
+                "rankName": {
+                    "description": "榜单名称，必填，如「创作者月度贡献榜」",
+                    "type": "string"
+                },
+                "sameScorePolicy": {
+                    "description": "同分排序策略，缺省 early_first：先到优先 / 后到优先 / 业务二级排序",
+                    "type": "string",
+                    "enum": [
+                        "early_first",
+                        "late_first",
+                        "sub_score"
+                    ]
+                },
+                "sortType": {
+                    "description": "排序方向，缺省 score_desc：score_desc 分高靠前 / score_asc 分低靠前",
+                    "type": "string",
+                    "enum": [
+                        "score_desc",
+                        "score_asc"
+                    ]
+                },
+                "startTime": {
+                    "description": "积分开始时间，可空（RFC3339）",
+                    "type": "string"
+                },
+                "targetType": {
+                    "description": "上榜对象类型，必填：user/content/room/product/org",
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "content",
+                        "room",
+                        "product",
+                        "org"
+                    ]
+                },
+                "timeType": {
+                    "description": "时间粒度，缺省 none：none/hour/day/week/month/season/custom",
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "hour",
+                        "day",
+                        "week",
+                        "month",
+                        "season",
+                        "custom"
+                    ]
+                },
+                "timezone": {
+                    "description": "时区，缺省 Asia/Shanghai",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.DimensionDTO": {
+            "type": "object",
+            "properties": {
+                "dimensionField": {
+                    "description": "维度字段名",
+                    "type": "string"
+                },
+                "dimensionName": {
+                    "description": "维度展示名",
+                    "type": "string"
+                },
+                "dimensionOrder": {
+                    "description": "拼接顺序",
+                    "type": "integer"
+                },
+                "required": {
+                    "description": "是否必填",
+                    "type": "boolean"
+                }
+            }
+        },
+        "rankflow_internal_dto.DimensionItem": {
+            "type": "object",
+            "required": [
+                "dimensionField"
+            ],
+            "properties": {
+                "dimensionField": {
+                    "description": "维度字段名，参与 type_id 拼接，如 business_id",
+                    "type": "string"
+                },
+                "dimensionName": {
+                    "description": "维度展示名，如「业务线」",
+                    "type": "string"
+                },
+                "required": {
+                    "description": "是否必填：true 时该维度缺值会拒绝写入",
+                    "type": "boolean"
+                }
+            }
+        },
+        "rankflow_internal_dto.MemberRankData": {
+            "type": "object",
+            "properties": {
+                "itemId": {
+                    "description": "上榜对象 ID",
+                    "type": "string"
+                },
+                "rank": {
+                    "description": "排名（1 基，-1 表示不在榜）",
+                    "type": "integer"
+                },
+                "rankId": {
+                    "description": "榜单 ID",
+                    "type": "integer"
+                },
+                "score": {
+                    "description": "分数",
+                    "type": "number"
+                },
+                "typeId": {
+                    "description": "子榜维度 ID",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.RankDTO": {
+            "type": "object",
+            "properties": {
+                "bizCode": {
+                    "description": "业务线编码",
+                    "type": "string"
+                },
+                "cacheTtlSeconds": {
+                    "description": "配置缓存 TTL（秒）",
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "description": "创建时间",
+                    "type": "string"
+                },
+                "endTime": {
+                    "description": "积分结束时间",
+                    "type": "string"
+                },
+                "maxRankSize": {
+                    "description": "榜单最大长度",
+                    "type": "integer"
+                },
+                "rankId": {
+                    "description": "榜单 ID",
+                    "type": "integer"
+                },
+                "rankName": {
+                    "description": "榜单名称",
+                    "type": "string"
+                },
+                "sameScorePolicy": {
+                    "description": "同分排序策略",
+                    "type": "string"
+                },
+                "sortType": {
+                    "description": "排序方向",
+                    "type": "string"
+                },
+                "startTime": {
+                    "description": "积分开始时间",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "状态：0草稿 1上线 2下线 3归档",
+                    "type": "integer"
+                },
+                "targetType": {
+                    "description": "上榜对象类型",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "description": "更新时间",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.RankDetailData": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "description": "基础配置",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/rankflow_internal_dto.RankDTO"
+                        }
+                    ]
+                },
+                "dimensions": {
+                    "description": "横向维度列表",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.DimensionDTO"
+                    }
+                },
+                "time": {
+                    "description": "时间维度配置",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/rankflow_internal_dto.TimeConfigDTO"
+                        }
+                    ]
+                }
+            }
+        },
+        "rankflow_internal_dto.RankEntryDTO": {
+            "type": "object",
+            "properties": {
+                "itemId": {
+                    "description": "上榜对象 ID",
+                    "type": "string"
+                },
+                "rank": {
+                    "description": "排名（1 基）",
+                    "type": "integer"
+                },
+                "score": {
+                    "description": "分数",
+                    "type": "number"
+                }
+            }
+        },
+        "rankflow_internal_dto.RankListData": {
+            "type": "object",
+            "properties": {
+                "list": {
+                    "description": "当前页数据",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.RankDTO"
+                    }
+                },
+                "page": {
+                    "description": "当前页码",
+                    "type": "integer"
+                },
+                "size": {
+                    "description": "每页大小",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "总条数",
+                    "type": "integer"
+                }
+            }
+        },
+        "rankflow_internal_dto.Response": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "description": "业务状态码：0 表示成功，非 0 表示失败",
+                    "type": "integer"
+                },
+                "data": {
+                    "description": "业务数据载荷：失败时为空"
+                },
+                "message": {
+                    "description": "提示信息：成功为 \"success\"，失败为错误描述",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.ScoreResultData": {
+            "type": "object",
+            "properties": {
+                "final": {
+                    "description": "最终排序分（含二级排序小数位）",
+                    "type": "number"
+                },
+                "itemId": {
+                    "description": "上榜对象 ID",
+                    "type": "string"
+                },
+                "rank": {
+                    "description": "当前排名（1 基，-1 表示不在榜）",
+                    "type": "integer"
+                },
+                "rankId": {
+                    "description": "榜单 ID",
+                    "type": "integer"
+                },
+                "score": {
+                    "description": "业务真实分数",
+                    "type": "integer"
+                },
+                "typeId": {
+                    "description": "子榜维度 ID",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.SetStatusRequest": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "description": "目标状态：0草稿 1上线 2下线 3归档",
+                    "type": "integer",
+                    "enum": [
+                        0,
+                        1,
+                        2,
+                        3
+                    ]
+                }
+            }
+        },
+        "rankflow_internal_dto.StatsData": {
+            "type": "object",
+            "properties": {
+                "cacheHitRate": {
+                    "description": "配置缓存命中率（0~1）",
+                    "type": "number"
+                },
+                "memberCount": {
+                    "description": "当前成员数",
+                    "type": "integer"
+                },
+                "rankId": {
+                    "description": "榜单 ID",
+                    "type": "integer"
+                },
+                "readCount": {
+                    "description": "累计读取次数",
+                    "type": "integer"
+                },
+                "readQps": {
+                    "description": "读取 QPS（进程内均值）",
+                    "type": "number"
+                },
+                "typeId": {
+                    "description": "子榜维度 ID",
+                    "type": "string"
+                },
+                "writeCount": {
+                    "description": "累计写入次数",
+                    "type": "integer"
+                },
+                "writeQps": {
+                    "description": "写入 QPS（进程内均值）",
+                    "type": "number"
+                }
+            }
+        },
+        "rankflow_internal_dto.TimeConfigDTO": {
+            "type": "object",
+            "properties": {
+                "anchorType": {
+                    "description": "时间锚点",
+                    "type": "string"
+                },
+                "timeType": {
+                    "description": "时间粒度",
+                    "type": "string"
+                },
+                "timezone": {
+                    "description": "时区",
+                    "type": "string"
+                }
+            }
+        },
+        "rankflow_internal_dto.TopResultData": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "description": "排名列表",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rankflow_internal_dto.RankEntryDTO"
+                    }
+                },
+                "rankId": {
+                    "description": "榜单 ID",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "子榜成员总数",
+                    "type": "integer"
+                },
+                "typeId": {
+                    "description": "子榜维度 ID",
+                    "type": "string"
+                }
+            }
+        }
+    }
+}
