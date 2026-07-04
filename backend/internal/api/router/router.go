@@ -14,7 +14,7 @@ import (
 func New(h *handler.Handler, log *zap.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Recovery(), middleware.CORS(), middleware.AccessLog(log))
+	r.Use(middleware.RequestContext(log), middleware.AccessLog(log), middleware.Recovery(log), middleware.CORS())
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"rankflow/internal/model"
 	"rankflow/internal/store/mysql"
 )
@@ -89,10 +91,12 @@ func toDimensionModels(dims []DimensionInput) []model.RankDimensionConfig {
 // CreateRank allocates a new rank_id and persists the full configuration.
 func (s *Service) CreateRank(ctx context.Context, in *CreateRankInput) (int64, error) {
 	if err := in.normalize(); err != nil {
+		s.logFailure(ctx, "create rank validation failed", err, zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode))
 		return 0, err
 	}
 	maxID, err := s.my.MaxRankID(ctx)
 	if err != nil {
+		s.logFailure(ctx, "allocate rank id failed", err, zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode))
 		return 0, err
 	}
 	rankID := maxID + 1
@@ -129,8 +133,10 @@ func (s *Service) CreateRank(ctx context.Context, in *CreateRankInput) (int64, e
 	}
 	dims := toDimensionModels(in.Dimensions)
 	if err := s.my.CreateRank(ctx, cfg, dims, tc); err != nil {
+		s.logFailure(ctx, "create rank failed", err, zap.Int64("rankId", rankID), zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode), zap.Int("dimensionCount", len(dims)))
 		return 0, err
 	}
+	s.logger(ctx).Info("create rank succeeded", zap.Int64("rankId", rankID), zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode), zap.Int("status", status), zap.Int("dimensionCount", len(dims)))
 	return rankID, nil
 }
 
@@ -138,13 +144,16 @@ func (s *Service) CreateRank(ctx context.Context, in *CreateRankInput) (int64, e
 // config cache.
 func (s *Service) UpdateRank(ctx context.Context, rankID int64, in *CreateRankInput) error {
 	if err := in.normalize(); err != nil {
+		s.logFailure(ctx, "update rank validation failed", err, zap.Int64("rankId", rankID), zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode))
 		return err
 	}
 	existing, err := s.my.GetRank(ctx, rankID)
 	if err != nil {
 		if errors.Is(err, mysql.ErrNotFound) {
+			s.logFailure(ctx, "update rank target not found", ErrNotFound, zap.Int64("rankId", rankID))
 			return ErrNotFound
 		}
+		s.logFailure(ctx, "load rank before update failed", err, zap.Int64("rankId", rankID))
 		return err
 	}
 	now := time.Now()
@@ -170,26 +179,42 @@ func (s *Service) UpdateRank(ctx context.Context, rankID int64, in *CreateRankIn
 	}
 	dims := toDimensionModels(in.Dimensions)
 	if err := s.my.UpdateRank(ctx, cfg, dims, tc); err != nil {
+		s.logFailure(ctx, "update rank failed", err, zap.Int64("rankId", rankID), zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode), zap.Int("dimensionCount", len(dims)))
 		return err
 	}
-	return s.rd.DelConfigCache(ctx, rankID)
+	if err := s.rd.DelConfigCache(ctx, rankID); err != nil {
+		s.logFailure(ctx, "delete rank config cache failed", err, zap.Int64("rankId", rankID))
+		return err
+	}
+	s.logger(ctx).Info("update rank succeeded", zap.Int64("rankId", rankID), zap.String("rankName", in.RankName), zap.String("bizCode", in.BizCode), zap.Int("dimensionCount", len(dims)))
+	return nil
 }
 
 // SetStatus transitions a rank between draft/online/offline/archive.
 func (s *Service) SetStatus(ctx context.Context, rankID int64, status int) error {
 	if status < model.StatusDraft || status > model.StatusArchive {
-		return fmt.Errorf("%w: invalid status", ErrValidation)
+		err := fmt.Errorf("%w: invalid status", ErrValidation)
+		s.logFailure(ctx, "set rank status validation failed", err, zap.Int64("rankId", rankID), zap.Int("status", status))
+		return err
 	}
 	if _, err := s.my.GetRank(ctx, rankID); err != nil {
 		if errors.Is(err, mysql.ErrNotFound) {
+			s.logFailure(ctx, "set rank status target not found", ErrNotFound, zap.Int64("rankId", rankID), zap.Int("status", status))
 			return ErrNotFound
 		}
+		s.logFailure(ctx, "load rank before status update failed", err, zap.Int64("rankId", rankID), zap.Int("status", status))
 		return err
 	}
 	if err := s.my.UpdateStatus(ctx, rankID, status); err != nil {
+		s.logFailure(ctx, "update rank status failed", err, zap.Int64("rankId", rankID), zap.Int("status", status))
 		return err
 	}
-	return s.rd.DelConfigCache(ctx, rankID)
+	if err := s.rd.DelConfigCache(ctx, rankID); err != nil {
+		s.logFailure(ctx, "delete rank config cache after status update failed", err, zap.Int64("rankId", rankID), zap.Int("status", status))
+		return err
+	}
+	s.logger(ctx).Info("set rank status succeeded", zap.Int64("rankId", rankID), zap.Int("status", status))
+	return nil
 }
 
 // ListRanks returns a paginated list of rank configs.
@@ -200,10 +225,22 @@ func (s *Service) ListRanks(ctx context.Context, name, bizCode string, status *i
 	if size <= 0 || size > 200 {
 		size = 20
 	}
-	return s.my.ListRanks(ctx, name, bizCode, status, (page-1)*size, size)
+	rows, total, err := s.my.ListRanks(ctx, name, bizCode, status, (page-1)*size, size)
+	if err != nil {
+		s.logFailure(ctx, "list ranks failed", err, zap.String("name", name), zap.String("bizCode", bizCode), zap.Any("status", status), zap.Int("page", page), zap.Int("size", size))
+		return nil, 0, err
+	}
+	s.logger(ctx).Info("list ranks succeeded", zap.String("name", name), zap.String("bizCode", bizCode), zap.Any("status", status), zap.Int("page", page), zap.Int("size", size), zap.Int64("total", total), zap.Int("rowCount", len(rows)))
+	return rows, total, nil
 }
 
 // GetRankDetail returns the resolved configuration of a rank.
 func (s *Service) GetRankDetail(ctx context.Context, rankID int64) (*ResolvedConfig, error) {
-	return s.resolve(ctx, rankID)
+	rc, err := s.resolve(ctx, rankID)
+	if err != nil {
+		s.logFailure(ctx, "get rank detail failed", err, zap.Int64("rankId", rankID))
+		return nil, err
+	}
+	s.logger(ctx).Info("get rank detail succeeded", zap.Int64("rankId", rankID), zap.Int("dimensionCount", len(rc.Dimensions)))
+	return rc, nil
 }

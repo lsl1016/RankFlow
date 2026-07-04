@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"rankflow/internal/dto"
 	"rankflow/internal/observability"
@@ -45,6 +46,20 @@ func fail(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrNotOnline):
 		status, code = http.StatusConflict, dto.CodeConflict
 	}
+	fields := []zap.Field{
+		zap.Int("status", status),
+		zap.Int("code", code),
+		zap.String("method", c.Request.Method),
+		zap.String("path", c.Request.URL.Path),
+		zap.String("route", c.FullPath()),
+		zap.Error(err),
+	}
+	fields = append(fields, handlerBusinessFields(c)...)
+	if status >= http.StatusInternalServerError {
+		observability.Logger(c.Request.Context(), nil).Error("request failed", fields...)
+	} else {
+		observability.Logger(c.Request.Context(), nil).Warn("request rejected", fields...)
+	}
 	c.JSON(status, dto.Fail(code, err.Error()))
 }
 
@@ -62,4 +77,15 @@ func parseDimensions(c *gin.Context) map[string]string {
 		}
 	}
 	return out
+}
+
+func handlerBusinessFields(c *gin.Context) []zap.Field {
+	fields := make([]zap.Field, 0, 2)
+	if rankID := c.Param("rankId"); rankID != "" {
+		fields = append(fields, zap.String("rankId", rankID))
+	}
+	if itemID := c.Param("itemId"); itemID != "" {
+		fields = append(fields, zap.String("itemId", itemID))
+	}
+	return fields
 }

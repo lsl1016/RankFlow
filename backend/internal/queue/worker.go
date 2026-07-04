@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"rankflow/internal/model"
+	"rankflow/internal/observability"
 	"rankflow/internal/service"
 	"rankflow/internal/store/mysql"
 	"rankflow/internal/store/redis"
@@ -67,6 +68,14 @@ func (w *Worker) handle(ctx context.Context, payload string) {
 		w.log.Warn("decode persist job failed", zap.Error(err))
 		return
 	}
+	if job.TraceID != "" {
+		ctx = observability.WithTraceID(ctx, job.TraceID)
+	}
+	log := observability.Logger(ctx, w.log,
+		zap.Int64("rankId", job.RankID),
+		zap.String("typeId", job.TypeID),
+		zap.String("itemId", job.ItemID),
+	)
 	var eventTime *time.Time
 	if job.EventTime > 0 {
 		t := time.Unix(job.EventTime, 0)
@@ -85,10 +94,13 @@ func (w *Worker) handle(ctx context.Context, payload string) {
 		UpdatedAt:     now,
 	}
 	if err := w.my.UpsertMemberScore(ctx, m); err != nil {
-		w.log.Warn("upsert member score failed",
-			zap.Int64("rankId", job.RankID), zap.String("itemId", job.ItemID), zap.Error(err))
+		log.Error("upsert member score failed", zap.Error(err))
 		// Re-enqueue once for at-least-once delivery.
-		_ = w.rd.EnqueuePersist(ctx, payload)
+		if enqueueErr := w.rd.EnqueuePersist(ctx, payload); enqueueErr != nil {
+			log.Error("re-enqueue persist job failed", zap.Error(enqueueErr))
+		}
 		time.Sleep(200 * time.Millisecond)
+		return
 	}
+	log.Info("persist member score succeeded", zap.Int64("score", job.Score), zap.Int64("subScore", job.SubScore), zap.Float64("final", job.Final))
 }
