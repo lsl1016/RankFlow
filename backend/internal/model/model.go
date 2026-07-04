@@ -92,6 +92,19 @@ type RankTimeConfig struct {
 
 func (RankTimeConfig) TableName() string { return "rank_time_config" }
 
+// RankSubBoard stores one materialized sub-leaderboard identified by type_id.
+type RankSubBoard struct {
+	ID         int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	RankID     int64     `gorm:"not null;uniqueIndex:uk_rank_sub_board,priority:1" json:"rankId"`
+	TypeID     string    `gorm:"size:256;not null;uniqueIndex:uk_rank_sub_board,priority:2" json:"typeId"`
+	Dimensions string    `gorm:"type:text" json:"dimensions"`
+	Status     int       `gorm:"not null;default:1" json:"status"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+func (RankSubBoard) TableName() string { return "rank_sub_board" }
+
 // RankMemberScore is the persisted score of a member within a sub-leaderboard.
 type RankMemberScore struct {
 	ID            int64      `gorm:"primaryKey;autoIncrement" json:"id"`

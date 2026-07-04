@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS rank_time_config (
     UNIQUE KEY uk_rank_id (rank_id)
 ) COMMENT='榜单时间维度配置表';
 
+CREATE TABLE IF NOT EXISTS rank_sub_board (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    rank_id BIGINT NOT NULL COMMENT '榜单ID',
+    type_id VARCHAR(256) NOT NULL COMMENT '子榜维度ID',
+    dimensions TEXT COMMENT '子榜维度JSON',
+    status TINYINT NOT NULL DEFAULT 1 COMMENT '状态:1上线,2下线',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_rank_sub_board (rank_id, type_id),
+    KEY idx_rank_sub_board_status (rank_id, status)
+) COMMENT='子榜状态表';
+
 CREATE TABLE IF NOT EXISTS rank_member_score (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
     rank_id BIGINT NOT NULL COMMENT '榜单ID',

@@ -30,6 +30,9 @@ func New(h *handler.Handler, log *zap.Logger) *gin.Engine {
 		api.GET("/ranks/:rankId", h.GetRank)
 		api.PUT("/ranks/:rankId", h.UpdateRank)
 		api.POST("/ranks/:rankId/status", h.SetStatus)
+		api.GET("/ranks/:rankId/subboards", h.ListSubBoards)
+		api.POST("/ranks/:rankId/subboards", h.ResolveSubBoard)
+		api.POST("/ranks/:rankId/subboards/status", h.SetSubBoardStatus)
 
 		api.POST("/ranks/:rankId/score/add", h.AddScore)
 		api.POST("/ranks/:rankId/score/set", h.SetScore)

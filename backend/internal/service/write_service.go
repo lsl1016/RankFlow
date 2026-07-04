@@ -79,6 +79,10 @@ func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput)
 		s.logFailure(ctx, "add score compute rank type failed", wrapped, zap.Int64("rankId", rankID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID), zap.Any("dimensions", in.Dimensions), zap.Int64("anchor", anchor))
 		return nil, wrapped
 	}
+	if err := s.requireSubBoardOnline(ctx, rankID, typeID, in.Dimensions); err != nil {
+		s.logFailure(ctx, "add score rejected because sub board is not online", err, zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID))
+		return nil, err
+	}
 
 	// Idempotency: claim the requestId before mutating. On any failure after
 	// the claim we release it so the event can be retried.
@@ -143,6 +147,10 @@ func (s *Service) SetScore(ctx context.Context, rankID int64, in *AddScoreInput)
 		wrapped := fmt.Errorf("%w: %v", ErrValidation, err)
 		s.logFailure(ctx, "set score compute rank type failed", wrapped, zap.Int64("rankId", rankID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID), zap.Any("dimensions", in.Dimensions), zap.Int64("anchor", anchor))
 		return nil, wrapped
+	}
+	if err := s.requireSubBoardOnline(ctx, rankID, typeID, in.Dimensions); err != nil {
+		s.logFailure(ctx, "set score rejected because sub board is not online", err, zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID))
+		return nil, err
 	}
 	final := score.Final(&rc.Config, in.Score, anchor, in.SubScore)
 	if err := s.rd.SetFinalScore(ctx, rankID, typeID, in.ItemID, in.Score, final); err != nil {

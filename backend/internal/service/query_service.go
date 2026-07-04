@@ -35,6 +35,9 @@ func (s *Service) typeIDFor(ctx context.Context, rankID int64, dims map[string]s
 		s.logFailure(ctx, "compute rank type failed", wrapped, zap.Int64("rankId", rankID), zap.Any("dimensions", dims), zap.Int64("anchor", anchor))
 		return nil, "", wrapped
 	}
+	if err := s.ensureSubBoard(ctx, rankID, typeID, dims); err != nil {
+		return nil, "", err
+	}
 	return rc, typeID, nil
 }
 

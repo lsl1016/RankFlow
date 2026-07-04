@@ -25,14 +25,54 @@
       </a-form-item>
     </a-form>
 
-    <a-table :columns="columns" :data-source="rows" :loading="loading" row-key="rankId"
-      :pagination="pagination" @change="onTableChange">
+    <a-table
+      :columns="columns"
+      :data-source="rows"
+      :loading="loading"
+      row-key="rankId"
+      :pagination="pagination"
+      :expandable="{ rowExpandable }"
+      @change="onTableChange"
+      @expand="onExpand"
+    >
+      <template #expandedRowRender="{ record }">
+        <div class="sub-board-panel">
+          <div class="sub-board-title">
+            <span>子榜</span>
+            <a-button size="small" @click="loadSubBoards(record.rankId)">刷新</a-button>
+          </div>
+          <a-table
+            :columns="subColumnsFor(record.rankId)"
+            :data-source="subBoards[record.rankId] || []"
+            :loading="subLoading[record.rankId]"
+            row-key="typeId"
+            size="small"
+            :pagination="false"
+          >
+            <template #bodyCell="{ column, record: sub }">
+              <template v-if="String(column.key).startsWith('dim:')">
+                {{ sub.dimensions?.[column.dimensionField] || '-' }}
+              </template>
+              <template v-else-if="column.key === 'status'">
+                <a-tag :color="STATUS_COLOR[sub.status]">{{ STATUS_TEXT[sub.status] }}</a-tag>
+              </template>
+              <template v-else-if="column.key === 'action'">
+                <a @click="$router.push({ path: `/ranks/${record.rankId}`, query: { typeId: sub.typeId } })">查看</a>
+                <a-divider type="vertical" />
+                <a v-if="sub.status !== 1" @click="changeSubStatus(record.rankId, sub, 1)">上线</a>
+                <a v-else @click="changeSubStatus(record.rankId, sub, 2)">下线</a>
+              </template>
+            </template>
+          </a-table>
+        </div>
+      </template>
+
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
           <a-tag :color="STATUS_COLOR[record.status]">{{ STATUS_TEXT[record.status] }}</a-tag>
         </template>
         <template v-else-if="column.key === 'timeType'">
-          {{ TIME_TYPE_TEXT[record.timeTypeLabel] || '—' }}
+          {{ TIME_TYPE_TEXT[record.timeTypeLabel] || '-' }}
         </template>
         <template v-else-if="column.key === 'action'">
           <a @click="$router.push(`/ranks/${record.rankId}`)">详情</a>
@@ -66,6 +106,8 @@ const query = reactive({ name: '', bizCode: '', status: undefined })
 const rows = ref([])
 const loading = ref(false)
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 })
+const subBoards = reactive({})
+const subLoading = reactive({})
 
 async function reload() {
   loading.value = true
@@ -79,6 +121,7 @@ async function reload() {
     })
     rows.value = data.list || []
     pagination.total = data.total || 0
+    await Promise.all(rows.value.map((row) => loadSubBoards(row.rankId)))
   } finally {
     loading.value = false
   }
@@ -98,11 +141,78 @@ function onTableChange(p) {
   reload()
 }
 
+async function onExpand(expanded, record) {
+  if (expanded && !subBoards[record.rankId]) {
+    await loadSubBoards(record.rankId)
+  }
+}
+
+async function loadSubBoards(rankId) {
+  subLoading[rankId] = true
+  try {
+    const data = await api.listSubBoards(rankId)
+    subBoards[rankId] = data.list || []
+  } finally {
+    subLoading[rankId] = false
+  }
+}
+
+function rowExpandable(record) {
+  return (subBoards[record.rankId] || []).length > 0
+}
+
 async function changeStatus(record, status) {
   await api.setStatus(record.rankId, status)
   message.success(status === 1 ? '已上线' : '已下线')
   reload()
 }
 
+async function changeSubStatus(rankId, sub, status) {
+  await api.setSubBoardStatus(rankId, { typeId: sub.typeId, status })
+  message.success(status === 1 ? '子榜已上线' : '子榜已下线')
+  loadSubBoards(rankId)
+}
+
+function dimensionKeysFor(rankId) {
+  const keys = []
+  for (const sub of subBoards[rankId] || []) {
+    for (const key of Object.keys(sub.dimensions || {})) {
+      if (!keys.includes(key)) keys.push(key)
+    }
+  }
+  return keys
+}
+
+function subColumnsFor(rankId) {
+  const dimensionColumns = dimensionKeysFor(rankId).map((field) => ({
+    title: field,
+    key: `dim:${field}`,
+    dimensionField: field,
+    width: 140,
+  }))
+  return [
+    { title: 'Type ID', dataIndex: 'typeId', key: 'typeId', width: 180 },
+    ...dimensionColumns,
+    { title: '成员数', dataIndex: 'memberCount', key: 'memberCount', width: 100 },
+    { title: '状态', key: 'status', width: 100 },
+    { title: '操作', key: 'action', width: 140 },
+  ]
+}
+
 onMounted(reload)
 </script>
+
+<style scoped>
+.sub-board-panel {
+  padding: 8px 16px 12px;
+  background: #fafafa;
+}
+
+.sub-board-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+</style>

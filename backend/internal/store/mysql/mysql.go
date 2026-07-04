@@ -42,6 +42,7 @@ func (s *Store) AutoMigrate() error {
 		&model.RankConfig{},
 		&model.RankDimensionConfig{},
 		&model.RankTimeConfig{},
+		&model.RankSubBoard{},
 		&model.RankMemberScore{},
 	)
 }
@@ -186,4 +187,40 @@ func (s *Store) CountMembers(ctx context.Context, rankID int64, typeID string) (
 	err := s.db.WithContext(ctx).Model(&model.RankMemberScore{}).
 		Where("rank_id = ? AND type_id = ?", rankID, typeID).Count(&n).Error
 	return n, err
+}
+
+// --- sub board ---
+
+func (s *Store) UpsertSubBoard(ctx context.Context, sb *model.RankSubBoard) error {
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "rank_id"}, {Name: "type_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"dimensions", "updated_at",
+		}),
+	}).Create(sb).Error
+}
+
+func (s *Store) GetSubBoard(ctx context.Context, rankID int64, typeID string) (*model.RankSubBoard, error) {
+	var sb model.RankSubBoard
+	err := s.db.WithContext(ctx).Where("rank_id = ? AND type_id = ?", rankID, typeID).First(&sb).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sb, nil
+}
+
+func (s *Store) ListSubBoards(ctx context.Context, rankID int64) ([]model.RankSubBoard, error) {
+	var rows []model.RankSubBoard
+	err := s.db.WithContext(ctx).Where("rank_id = ?", rankID).
+		Order("updated_at desc, id desc").Find(&rows).Error
+	return rows, err
+}
+
+func (s *Store) UpdateSubBoardStatus(ctx context.Context, rankID int64, typeID string, status int) error {
+	return s.db.WithContext(ctx).Model(&model.RankSubBoard{}).
+		Where("rank_id = ? AND type_id = ?", rankID, typeID).
+		Update("status", status).Error
 }
