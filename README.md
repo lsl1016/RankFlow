@@ -23,7 +23,7 @@ RankFlow/
 ├── backend/              # Go 服务
 │   ├── cmd/api           # HTTP 入口 + 异步落库 worker
 │   ├── internal/
-│   │   ├── config/       # 环境变量配置
+│   │   ├── config/       # TOML 配置
 │   │   ├── model/        # GORM 模型
 │   │   ├── store/        # mysql / redis 仓储
 │   │   ├── dimension/    # type_id 维度计算
@@ -51,8 +51,9 @@ docker compose up -d
 
 ```bash
 cd backend
+cp conf/app.toml.example conf/app.toml
+# edit conf/app.toml for remote MySQL/Redis when needed
 go run ./cmd/api
-# 监听 :8080，默认连接本机 MySQL/Redis（见 backend/.env.example）
 ```
 
 ### 3. 启动管理后台

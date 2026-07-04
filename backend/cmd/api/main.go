@@ -28,13 +28,16 @@ import (
 // @description	可配置、可复用的榜单基础服务：榜单配置、分数更新、排名查询。
 // @BasePath		/api
 func main() {
-	cfg := config.Load()
-
 	log, err := observability.NewLogger()
 	if err != nil {
 		panic(err)
 	}
 	defer log.Sync()
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("load config failed", zap.Error(err))
+	}
 
 	myStore, err := mysql.New(cfg.MySQLDSN)
 	if err != nil {

@@ -12,6 +12,7 @@ dist/
 # Env / local
 .env
 *.local
+/backend/conf/app.toml
 
 # IDE / OS
 .DS_Store
