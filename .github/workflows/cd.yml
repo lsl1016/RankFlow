@@ -1,0 +1,140 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    if: >-
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      ) || (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      OWNER: ${{ github.repository_owner }}
+      BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/rankflow-backend
+      FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/rankflow-frontend
+      IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+
+      - name: Set lowercase owner
+        run: echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR for push
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/rankflow-backend:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ env.OWNER_LC }}/rankflow-backend:latest
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web-admin
+          file: ./web-admin/Dockerfile
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/rankflow-frontend:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ env.OWNER_LC }}/rankflow-frontend:latest
+
+      - name: Validate deploy secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          FRONTEND_PORT: ${{ secrets.FRONTEND_PORT }}
+          RANKFLOW_MYSQL_DSN: ${{ secrets.RANKFLOW_MYSQL_DSN }}
+          RANKFLOW_REDIS_ADDR: ${{ secrets.RANKFLOW_REDIS_ADDR }}
+        run: |
+          set -eu
+          for name in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PATH DEPLOY_KNOWN_HOSTS DEPLOY_SSH_KEY GHCR_USERNAME GHCR_PULL_TOKEN FRONTEND_PORT RANKFLOW_MYSQL_DSN RANKFLOW_REDIS_ADDR; do
+            if [ -z "$(eval "printf '%s' \"\${$name}\"")" ]; then
+              echo "$name is required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare deployment files
+        run: |
+          cp docker-compose.prod.yml docker-compose.deploy.yml
+          umask 077
+          cat <<EOF > .env.prod
+          GHCR_OWNER=${OWNER_LC}
+          IMAGE_TAG=${IMAGE_TAG}
+          FRONTEND_PORT=${{ secrets.FRONTEND_PORT }}
+          RANKFLOW_MYSQL_DSN=${{ secrets.RANKFLOW_MYSQL_DSN }}
+          RANKFLOW_REDIS_ADDR=${{ secrets.RANKFLOW_REDIS_ADDR }}
+          RANKFLOW_REDIS_PASSWORD=${{ secrets.RANKFLOW_REDIS_PASSWORD }}
+          RANKFLOW_REDIS_DB=${{ secrets.RANKFLOW_REDIS_DB }}
+          RANKFLOW_PERSIST_WORKERS=${{ secrets.RANKFLOW_PERSIST_WORKERS }}
+          EOF
+          chmod 600 .env.prod
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add deploy host to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload deployment files
+        run: |
+          scp -P "${{ secrets.DEPLOY_PORT }}" docker-compose.deploy.yml .env.prod \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/"
+
+      - name: Deploy to server
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          ssh -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<EOF
+          set -e
+          cd "${{ secrets.DEPLOY_PATH }}"
+          chmod 600 .env.prod
+          echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          docker compose --env-file .env.prod -f docker-compose.deploy.yml up -d --pull always
+          EOF
