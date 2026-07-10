@@ -126,7 +126,7 @@ async function load() {
     dimensions: (data.dimensions || []).map((d) => ({
       dimensionName: d.dimensionName,
       dimensionField: d.dimensionField,
-      required: d.required === 1,
+      required: d.required === true || d.required === 1,
     })),
     online: c.status === 1,
   })

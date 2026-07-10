@@ -48,11 +48,54 @@
           <a v-else @click="changeSubStatus(activeSubBoard, 2)">下线</a>
         </a-form-item>
         <a-form-item>
-          <a-button @click="loadSubBoards">刷新子榜</a-button>
+          <a-space>
+            <a-button type="primary" @click="openCreateSubBoard">新增子榜</a-button>
+            <a-button @click="loadSubBoards">刷新子榜</a-button>
+          </a-space>
         </a-form-item>
       </a-form>
-      <a-empty v-if="!subLoading && !subBoards.length" description="当前榜单暂无子榜" />
+      <a-empty v-if="!subLoading && !subBoards.length" description="当前榜单暂无子榜">
+        <a-button type="primary" @click="openCreateSubBoard">新增子榜</a-button>
+      </a-empty>
     </a-card>
+
+    <a-modal
+      v-model:open="createSubBoardOpen"
+      title="新增子榜"
+      ok-text="创建并选中"
+      cancel-text="取消"
+      :confirm-loading="creatingSubBoard"
+      @ok="createSubBoard"
+    >
+      <a-alert
+        v-if="timeType !== 'none'"
+        type="info"
+        show-icon
+        message="子榜将创建在当前时间周期"
+        style="margin-bottom: 16px"
+      />
+      <a-form layout="vertical">
+        <a-form-item
+          v-for="dimension in dimensions"
+          :key="dimension.dimensionField"
+          :label="dimension.dimensionName || dimension.dimensionField"
+          :required="isRequiredDimension(dimension)"
+          :validate-status="dimensionErrors[dimension.dimensionField] ? 'error' : undefined"
+          :help="dimensionErrors[dimension.dimensionField]"
+        >
+          <a-input
+            v-model:value="newSubBoardDimensions[dimension.dimensionField]"
+            :placeholder="`请输入${dimension.dimensionName || dimension.dimensionField}`"
+            @input="dimensionErrors[dimension.dimensionField] = ''"
+          />
+          <div class="dimension-field">字段：{{ dimension.dimensionField }}</div>
+        </a-form-item>
+        <a-empty
+          v-if="!dimensions.length"
+          :description="timeType === 'none' ? '该榜单将创建全局子榜' : '该榜单无需填写横向维度'"
+        />
+      </a-form>
+    </a-modal>
 
     <a-card title="实时概览" size="small">
       <a-empty v-if="!activeSubBoard" description="请先选择子榜" />
@@ -111,6 +154,10 @@ const activeSubBoard = ref(null)
 const activeTypeID = ref(undefined)
 const loading = ref(false)
 const subLoading = ref(false)
+const createSubBoardOpen = ref(false)
+const creatingSubBoard = ref(false)
+const newSubBoardDimensions = reactive({})
+const dimensionErrors = reactive({})
 const autoRefresh = ref(false)
 const testItem = ref('user_10086')
 const testScore = ref(10)
@@ -179,6 +226,57 @@ async function loadSubBoards() {
     }
   } finally {
     subLoading.value = false
+  }
+}
+
+function openCreateSubBoard() {
+  for (const key of Object.keys(newSubBoardDimensions)) delete newSubBoardDimensions[key]
+  for (const key of Object.keys(dimensionErrors)) delete dimensionErrors[key]
+  for (const dimension of dimensions.value) {
+    newSubBoardDimensions[dimension.dimensionField] = ''
+  }
+  createSubBoardOpen.value = true
+}
+
+function isRequiredDimension(dimension) {
+  return dimension.required === true || dimension.required === 1
+}
+
+function validateSubBoardDimensions() {
+  let valid = true
+  for (const dimension of dimensions.value) {
+    const field = dimension.dimensionField
+    const value = String(newSubBoardDimensions[field] || '').trim()
+    newSubBoardDimensions[field] = value
+    dimensionErrors[field] = ''
+    if (isRequiredDimension(dimension) && !value) {
+      dimensionErrors[field] = `请填写${dimension.dimensionName || field}`
+      valid = false
+    }
+  }
+  return valid
+}
+
+async function createSubBoard() {
+  if (!validateSubBoardDimensions()) return
+  creatingSubBoard.value = true
+  try {
+    const values = {}
+    for (const dimension of dimensions.value) {
+      const value = newSubBoardDimensions[dimension.dimensionField]
+      if (value) values[dimension.dimensionField] = value
+    }
+    const sub = await api.resolveSubBoard(props.id, {
+      timestamp: Math.floor(Date.now() / 1000),
+      dimensions: values,
+    })
+    createSubBoardOpen.value = false
+    await loadSubBoards()
+    activeTypeID.value = sub.typeId
+    selectSubBoardByType(sub.typeId)
+    message.success('子榜创建成功')
+  } finally {
+    creatingSubBoard.value = false
   }
 }
 
@@ -272,3 +370,11 @@ onUnmounted(() => timer && clearInterval(timer))
 
 watch(autoRefresh, toggleTimer)
 </script>
+
+<style scoped>
+.dimension-field {
+  margin-top: 4px;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+</style>
