@@ -54,6 +54,10 @@ cd backend
 cp conf/app.toml.example conf/app.toml
 # edit conf/app.toml for remote MySQL/Redis when needed
 go run ./cmd/api
+<<<<<<< HEAD
+=======
+# 监听 :8080，默认读取 backend/config.yaml，可用环境变量覆盖
+>>>>>>> 8a2d5097677a99bc1cf2fe378f95e0b18cb8d416
 ```
 
 ### 3. 启动管理后台
@@ -120,3 +124,49 @@ cd backend && go test ./...
 ```
 
 纯逻辑单元测试覆盖维度拼接（`dimension`）和排序分编码（`score`）。
+
+## CI/CD
+
+仓库新增两条 GitHub Actions 流水线：
+
+- `CI`：在 `pull_request` 和 `push main` 时执行后端 `go test ./...`，以及前端 `npm ci && npm run build`
+- `CD`：在 `CI` 成功且分支为 `main` 时，构建并推送 `backend` / `frontend` 镜像到 GHCR，然后通过 SSH 登录服务器执行 `docker compose up -d --pull always`
+
+默认镜像名：
+
+- `ghcr.io/<owner>/rankflow-backend:<tag>`
+- `ghcr.io/<owner>/rankflow-frontend:<tag>`
+
+生产部署使用 `docker-compose.prod.yml`，只编排：
+
+- `frontend`：对外提供 HTTP 访问
+- `backend`：只在 Compose 内部暴露 `:8080`
+
+MySQL 和 Redis 走外部服务，通过 GitHub Secrets 注入以下环境变量：
+
+- `RANKFLOW_MYSQL_DSN`
+- `RANKFLOW_REDIS_ADDR`
+- `RANKFLOW_REDIS_PASSWORD`
+- `RANKFLOW_REDIS_DB`
+- `RANKFLOW_PERSIST_WORKERS`
+
+部署前需要在 GitHub 仓库中配置这些 Secrets：
+
+- `DEPLOY_HOST`
+- `DEPLOY_PORT`
+- `DEPLOY_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_KNOWN_HOSTS`
+- `DEPLOY_PATH`
+- `GHCR_USERNAME`
+- `GHCR_PULL_TOKEN`
+- `FRONTEND_PORT`
+- 上述 `RANKFLOW_*` 配置项（其中 `RANKFLOW_MYSQL_DSN`、`RANKFLOW_REDIS_ADDR` 为必填）
+
+服务器前置要求：
+
+- 已安装 Docker Engine 和 Docker Compose Plugin
+- 部署目录 `DEPLOY_PATH` 已存在且可写
+- 服务器可访问 `ghcr.io`
+- SSH 用户有执行 `docker compose` 的权限
+- 手动触发 `CD` 时也需要从 `main` 分支发起，工作流会拒绝其他分支

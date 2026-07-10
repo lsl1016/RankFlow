@@ -1,0 +1,6 @@
+bin/
+.git
+.gitignore
+*.test
+*.out
+README.md
