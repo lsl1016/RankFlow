@@ -2,8 +2,10 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
@@ -22,6 +24,10 @@ type Config struct {
 
 	// PersistWorkers controls how many goroutines drain the async persist queue.
 	PersistWorkers int
+
+	AuthEnabled bool
+	AdminToken  string
+	WriterToken string
 }
 
 type rawConfig struct {
@@ -35,6 +41,11 @@ type rawConfig struct {
 		DB       *int    `yaml:"db"`
 	} `yaml:"redis"`
 	PersistWorkers *int `yaml:"persistWorkers"`
+	Auth           struct {
+		Enabled     *bool   `yaml:"enabled"`
+		AdminToken  *string `yaml:"adminToken"`
+		WriterToken *string `yaml:"writerToken"`
+	} `yaml:"auth"`
 }
 
 func Load() (*Config, error) {
@@ -46,17 +57,23 @@ func Load() (*Config, error) {
 	}
 	if err := applyFile(cfg, configPath); err != nil {
 		if configPath != defaultConfigPath || !errors.Is(err, os.ErrNotExist) {
-			panic(err)
+			return nil, err
 		}
 	}
 
 	envOverrides().apply(cfg)
+	if err := validate(cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
 func LoadFromFile(path string) (*Config, error) {
 	cfg := defaultConfig()
 	if err := applyFile(cfg, path); err != nil {
+		return nil, err
+	}
+	if err := validate(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -70,6 +87,9 @@ func defaultConfig() *Config {
 		RedisPassword:  "",
 		RedisDB:        0,
 		PersistWorkers: 2,
+		AuthEnabled:    false,
+		AdminToken:     "",
+		WriterToken:    "",
 	}
 }
 
@@ -108,6 +128,15 @@ func envOverrides() rawConfig {
 	if v, ok := lookupEnvInt("RANKFLOW_PERSIST_WORKERS"); ok {
 		raw.PersistWorkers = &v
 	}
+	if v, ok := lookupEnvBool("RANKFLOW_AUTH_ENABLED"); ok {
+		raw.Auth.Enabled = &v
+	}
+	if v, ok := os.LookupEnv("RANKFLOW_ADMIN_TOKEN"); ok {
+		raw.Auth.AdminToken = &v
+	}
+	if v, ok := os.LookupEnv("RANKFLOW_WRITER_TOKEN"); ok {
+		raw.Auth.WriterToken = &v
+	}
 
 	return raw
 }
@@ -131,6 +160,33 @@ func (r rawConfig) apply(cfg *Config) {
 	if r.PersistWorkers != nil {
 		cfg.PersistWorkers = *r.PersistWorkers
 	}
+	if r.Auth.Enabled != nil {
+		cfg.AuthEnabled = *r.Auth.Enabled
+	}
+	if r.Auth.AdminToken != nil {
+		cfg.AdminToken = *r.Auth.AdminToken
+	}
+	if r.Auth.WriterToken != nil {
+		cfg.WriterToken = *r.Auth.WriterToken
+	}
+}
+
+func validate(cfg *Config) error {
+	if !cfg.AuthEnabled {
+		return nil
+	}
+	cfg.AdminToken = strings.TrimSpace(cfg.AdminToken)
+	cfg.WriterToken = strings.TrimSpace(cfg.WriterToken)
+	if cfg.AdminToken == "" {
+		return fmt.Errorf("RANKFLOW_ADMIN_TOKEN is required when auth is enabled")
+	}
+	if cfg.WriterToken == "" {
+		return fmt.Errorf("RANKFLOW_WRITER_TOKEN is required when auth is enabled")
+	}
+	if cfg.AdminToken == cfg.WriterToken {
+		return fmt.Errorf("admin and writer tokens must be different")
+	}
+	return nil
 }
 
 func lookupNonEmptyEnv(key string) (string, bool) {
@@ -148,4 +204,16 @@ func lookupEnvInt(key string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func lookupEnvBool(key string) (bool, bool) {
+	v, ok := lookupNonEmptyEnv(key)
+	if !ok {
+		return false, false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, false
+	}
+	return b, true
 }
