@@ -28,8 +28,6 @@ func New(addr, password string, db int) (*Store, error) {
 
 func (s *Store) Client() *redis.Client { return s.rdb }
 
-// --- key builders (see design doc section 9) ---
-
 func ZSetKey(rankID int64, typeID string) string {
 	return fmt.Sprintf("rank:zset:%d:%s", rankID, typeID)
 }
@@ -48,27 +46,14 @@ func IdemKey(rankID int64, requestID string) string {
 
 const PersistQueueKey = "rank:queue:persist"
 
-// --- idempotency ---
-
-// ClaimIdempotency atomically marks a request as processed. Returns true when
-// the caller won the claim (i.e. it is the first time we see this requestID).
 func (s *Store) ClaimIdempotency(ctx context.Context, rankID int64, requestID string, ttl time.Duration) (bool, error) {
 	return s.rdb.SetNX(ctx, IdemKey(rankID, requestID), 1, ttl).Result()
 }
 
-// ReleaseIdempotency removes the idempotency marker (used on rollback).
 func (s *Store) ReleaseIdempotency(ctx context.Context, rankID int64, requestID string) {
 	s.rdb.Del(ctx, IdemKey(rankID, requestID))
 }
 
-// --- zset operations ---
-
-// AddFinalScore atomically applies a score delta to the member and stores the
-// resulting final_score back into the zset with the tie-break encoding handled
-// by the caller. It returns the new business score (integer part).
-//
-// The script keeps the running integer business score in a hash field so the
-// final_score (which embeds tie-break decimals) can be recomputed consistently.
 var addScoreScript = redis.NewScript(`
 local zkey = KEYS[1]
 local mkey = KEYS[2]
@@ -96,7 +81,7 @@ if maxsize > 0 then
     end
   end
 end
-return tostring(newScore)
+return newScore
 `)
 
 func (s *Store) AddFinalScore(ctx context.Context, rankID int64, typeID, itemID string, delta int64, subDecimal float64, maxSize int, sortDesc bool) (int64, error) {
@@ -104,30 +89,49 @@ func (s *Store) AddFinalScore(ctx context.Context, rankID int64, typeID, itemID 
 	if sortDesc {
 		descFlag = "1"
 	}
-	res, err := addScoreScript.Run(ctx, s.rdb,
+	return addScoreScript.Run(ctx, s.rdb,
 		[]string{ZSetKey(rankID, typeID), MemberKey(rankID, typeID, itemID)},
 		itemID, delta, subDecimal, maxSize, descFlag,
-	).Text()
-	if err != nil {
-		return 0, err
-	}
-	var newScore int64
-	if _, err := fmt.Sscanf(res, "%d", &newScore); err != nil {
-		return 0, err
-	}
-	return newScore, nil
+	).Int64()
 }
 
-// SetFinalScore overwrites a member's business score and final_score.
-func (s *Store) SetFinalScore(ctx context.Context, rankID int64, typeID, itemID string, score int64, finalScore float64) error {
-	pipe := s.rdb.TxPipeline()
-	pipe.HSet(ctx, MemberKey(rankID, typeID, itemID), "score", score)
-	pipe.ZAdd(ctx, ZSetKey(rankID, typeID), redis.Z{Score: finalScore, Member: itemID})
-	_, err := pipe.Exec(ctx)
-	return err
+var setScoreScript = redis.NewScript(`
+local zkey = KEYS[1]
+local mkey = KEYS[2]
+local member = ARGV[1]
+local businessScore = ARGV[2]
+local finalScore = tonumber(ARGV[3])
+local maxsize = tonumber(ARGV[4])
+local sortDesc = ARGV[5]
+
+redis.call('HSET', mkey, 'score', businessScore)
+redis.call('ZADD', zkey, finalScore, member)
+
+if maxsize > 0 then
+  local total = redis.call('ZCARD', zkey)
+  if total > maxsize then
+    local excess = total - maxsize
+    if sortDesc == '1' then
+      redis.call('ZREMRANGEBYRANK', zkey, 0, excess - 1)
+    else
+      redis.call('ZREMRANGEBYRANK', zkey, -excess, -1)
+    end
+  end
+end
+return 1
+`)
+
+func (s *Store) SetFinalScore(ctx context.Context, rankID int64, typeID, itemID string, businessScore int64, finalScore float64, maxSize int, sortDesc bool) error {
+	descFlag := "0"
+	if sortDesc {
+		descFlag = "1"
+	}
+	return setScoreScript.Run(ctx, s.rdb,
+		[]string{ZSetKey(rankID, typeID), MemberKey(rankID, typeID, itemID)},
+		itemID, businessScore, finalScore, maxSize, descFlag,
+	).Err()
 }
 
-// GetScore returns the stored integer business score for a member (0 if absent).
 func (s *Store) GetScore(ctx context.Context, rankID int64, typeID, itemID string) (int64, error) {
 	v, err := s.rdb.HGet(ctx, MemberKey(rankID, typeID, itemID), "score").Int64()
 	if err == redis.Nil {
@@ -136,14 +140,20 @@ func (s *Store) GetScore(ctx context.Context, rankID int64, typeID, itemID strin
 	return v, err
 }
 
-// RankEntry is one row of a leaderboard query.
+func (s *Store) GetFinalScore(ctx context.Context, rankID int64, typeID, itemID string) (float64, error) {
+	v, err := s.rdb.ZScore(ctx, ZSetKey(rankID, typeID), itemID).Result()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return v, err
+}
+
 type RankEntry struct {
 	Rank   int     `json:"rank"`
 	ItemID string  `json:"itemId"`
 	Score  float64 `json:"score"`
 }
 
-// Top returns members ordered according to sortDesc with their 1-based rank.
 func (s *Store) Top(ctx context.Context, rankID int64, typeID string, offset, limit int, sortDesc bool) ([]RankEntry, error) {
 	key := ZSetKey(rankID, typeID)
 	var zs []redis.Z
@@ -156,19 +166,36 @@ func (s *Store) Top(ctx context.Context, rankID int64, typeID string, offset, li
 	if err != nil {
 		return nil, err
 	}
-	out := make([]RankEntry, 0, len(zs))
+	if len(zs) == 0 {
+		return []RankEntry{}, nil
+	}
+
+	pipe := s.rdb.Pipeline()
+	itemIDs := make([]string, len(zs))
+	scoreCmds := make([]*redis.StringCmd, len(zs))
 	for i, z := range zs {
+		itemIDs[i] = fmt.Sprint(z.Member)
+		scoreCmds[i] = pipe.HGet(ctx, MemberKey(rankID, typeID, itemIDs[i]), "score")
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	out := make([]RankEntry, 0, len(zs))
+	for i := range zs {
+		businessScore, err := scoreCmds[i].Int64()
+		if err != nil {
+			return nil, fmt.Errorf("load business score for item %q: %w", itemIDs[i], err)
+		}
 		out = append(out, RankEntry{
 			Rank:   offset + i + 1,
-			ItemID: fmt.Sprint(z.Member),
-			Score:  truncateScore(z.Score),
+			ItemID: itemIDs[i],
+			Score:  float64(businessScore),
 		})
 	}
 	return out, nil
 }
 
-// MemberRank returns the 1-based rank and final score of a member.
-// rank is -1 when the member is not present.
 func (s *Store) MemberRank(ctx context.Context, rankID int64, typeID, itemID string, sortDesc bool) (int, float64, error) {
 	key := ZSetKey(rankID, typeID)
 	var rank int64
@@ -184,17 +211,13 @@ func (s *Store) MemberRank(ctx context.Context, rankID int64, typeID, itemID str
 	if err != nil {
 		return 0, 0, err
 	}
-	score, err := s.rdb.ZScore(ctx, key, itemID).Result()
-	if err == redis.Nil {
-		return -1, 0, nil
-	}
+	businessScore, err := s.GetScore(ctx, rankID, typeID, itemID)
 	if err != nil {
 		return 0, 0, err
 	}
-	return int(rank) + 1, truncateScore(score), nil
+	return int(rank) + 1, float64(businessScore), nil
 }
 
-// Around returns members surrounding the given member (before/after window).
 func (s *Store) Around(ctx context.Context, rankID int64, typeID, itemID string, before, after int, sortDesc bool) ([]RankEntry, error) {
 	rank, _, err := s.MemberRank(ctx, rankID, typeID, itemID, sortDesc)
 	if err != nil {
@@ -215,8 +238,6 @@ func (s *Store) Card(ctx context.Context, rankID int64, typeID string) (int64, e
 	return s.rdb.ZCard(ctx, ZSetKey(rankID, typeID)).Result()
 }
 
-// --- config cache ---
-
 func (s *Store) SetConfigCache(ctx context.Context, rankID int64, payload string, ttl time.Duration) error {
 	return s.rdb.Set(ctx, ConfigKey(rankID), payload, ttl).Err()
 }
@@ -236,14 +257,10 @@ func (s *Store) DelConfigCache(ctx context.Context, rankID int64) error {
 	return s.rdb.Del(ctx, ConfigKey(rankID)).Err()
 }
 
-// --- async persist queue ---
-
 func (s *Store) EnqueuePersist(ctx context.Context, payload string) error {
 	return s.rdb.LPush(ctx, PersistQueueKey, payload).Err()
 }
 
-// DequeuePersist blocks up to timeout waiting for a persist job. Returns
-// ("", nil) on timeout.
 func (s *Store) DequeuePersist(ctx context.Context, timeout time.Duration) (string, error) {
 	res, err := s.rdb.BRPop(ctx, timeout, PersistQueueKey).Result()
 	if err == redis.Nil {
@@ -252,16 +269,8 @@ func (s *Store) DequeuePersist(ctx context.Context, timeout time.Duration) (stri
 	if err != nil {
 		return "", err
 	}
-	// res = [key, value]
 	if len(res) == 2 {
 		return res[1], nil
 	}
 	return "", nil
-}
-
-// truncateScore drops the tie-break decimal noise for display, leaving the
-// business-relevant magnitude. We keep two decimals so callers that genuinely
-// use sub_score decimals still see them.
-func truncateScore(f float64) float64 {
-	return float64(int64(f*100)) / 100
 }
