@@ -43,7 +43,7 @@ func fail(c *gin.Context, err error) {
 		status, code = http.StatusBadRequest, dto.CodeValidation
 	case errors.Is(err, service.ErrNotFound):
 		status, code = http.StatusNotFound, dto.CodeNotFound
-	case errors.Is(err, service.ErrNotOnline):
+	case errors.Is(err, service.ErrNotOnline), errors.Is(err, service.ErrIdempotencyConflict):
 		status, code = http.StatusConflict, dto.CodeConflict
 	}
 	fields := []zap.Field{
@@ -59,6 +59,10 @@ func fail(c *gin.Context, err error) {
 		observability.Logger(c.Request.Context(), nil).Error("request failed", fields...)
 	} else {
 		observability.Logger(c.Request.Context(), nil).Warn("request rejected", fields...)
+	}
+	if status >= http.StatusInternalServerError {
+		c.JSON(status, dto.Fail(code, "internal server error"))
+		return
 	}
 	c.JSON(status, dto.Fail(code, err.Error()))
 }
