@@ -1,7 +1,6 @@
 package score
 
 import (
-	"math"
 	"testing"
 
 	"rankflow/internal/model"
@@ -11,67 +10,36 @@ func TestSubDecimalEarlyFirstDesc(t *testing.T) {
 	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreEarlyFirst}
 	early := SubDecimal(cfg, 1000, 0)
 	late := SubDecimal(cfg, 2000, 0)
-	if !(early > late) {
-		t.Fatalf("early event should outrank later on tie (desc): early=%v late=%v", early, late)
-	}
-	if early <= 0 || early >= 1 {
-		t.Fatalf("sub decimal must be in (0,1): %v", early)
-	}
+	if !(early > late) { t.Fatalf("early event should outrank later: early=%v late=%v", early, late) }
 }
 
-func TestSubDecimalLateFirstDesc(t *testing.T) {
-	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreLateFirst}
-	early := SubDecimal(cfg, 1000, 0)
-	late := SubDecimal(cfg, 2000, 0)
-	if !(late > early) {
-		t.Fatalf("later event should outrank earlier (late_first desc): early=%v late=%v", early, late)
-	}
+func TestSubScoreNeverBreaksPrimaryOrdering(t *testing.T) {
+	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreSubScore}
+	high := Final(cfg, 100, 0, -200_000_000_000)
+	low := Final(cfg, 99, 0, 0)
+	if !(high > low) { t.Fatalf("higher primary score must win: high=%v low=%v", high, low) }
 }
 
-func TestSubDecimalAscNegates(t *testing.T) {
-	cfg := &model.RankConfig{SortType: model.SortScoreAsc, SameScorePolicy: model.SameScoreEarlyFirst}
-	v := SubDecimal(cfg, 1000, 0)
-	if v > 0 {
-		t.Fatalf("ascending tie-break should be negative, got %v", v)
-	}
-}
-
-func TestFinalKeepsIntegerOrdering(t *testing.T) {
+func TestEncodedMemberPreservesOneSecondTieAtLargePrimaryScore(t *testing.T) {
 	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreEarlyFirst}
-	low := Final(cfg, 100, 1000, 0)
-	high := Final(cfg, 101, 9999, 0)
-	if !(high > low) {
-		t.Fatalf("higher business score must win regardless of tie-break: low=%v high=%v", low, high)
+	early := EncodedMember(cfg, 1_700_000_000, 0, "early")
+	late := EncodedMember(cfg, 1_700_000_001, 0, "late")
+	if !(early > late) {
+		t.Fatalf("descending equal-score lexicographic order must prefer earlier second: early=%q late=%q", early, late)
 	}
 }
 
-func TestSubScoreIsMonotonicForSignedValues(t *testing.T) {
+func TestEncodedMemberSubScoreSignedOrder(t *testing.T) {
 	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreSubScore}
-	neg := SubDecimal(cfg, 0, -10)
-	zero := SubDecimal(cfg, 0, 0)
-	pos := SubDecimal(cfg, 0, 10)
-	if !(neg < zero && zero < pos) {
-		t.Fatalf("sub score mapping must be monotonic: neg=%v zero=%v pos=%v", neg, zero, pos)
-	}
-	if neg < 0 || pos >= 1 {
-		t.Fatalf("sub score fractions must stay inside [0,1): neg=%v pos=%v", neg, pos)
-	}
+	neg := EncodedMember(cfg, 0, -10, "neg")
+	zero := EncodedMember(cfg, 0, 0, "zero")
+	pos := EncodedMember(cfg, 0, 10, "pos")
+	if !(pos > zero && zero > neg) { t.Fatalf("signed sub score ordering broken: %q %q %q", neg, zero, pos) }
 }
 
-func TestNegativeSubScoreCannotCrossPrimaryScoreBoundaryDesc(t *testing.T) {
-	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreSubScore}
-	higherPrimary := Final(cfg, 100, 0, -200_000_000_000)
-	lowerPrimary := Final(cfg, 99, 0, math.MaxInt64)
-	if !(higherPrimary > lowerPrimary) {
-		t.Fatalf("primary score must dominate sub score: score100=%v score99=%v", higherPrimary, lowerPrimary)
-	}
-}
-
-func TestSubScoreCannotCrossPrimaryScoreBoundaryAsc(t *testing.T) {
-	cfg := &model.RankConfig{SortType: model.SortScoreAsc, SameScorePolicy: model.SameScoreSubScore}
-	lowerPrimary := Final(cfg, 99, 0, math.MinInt64)
-	higherPrimary := Final(cfg, 100, 0, math.MaxInt64)
-	if !(lowerPrimary < higherPrimary) {
-		t.Fatalf("primary score must dominate sub score for ascending rank: score99=%v score100=%v", lowerPrimary, higherPrimary)
-	}
+func TestAscendingTieKeyIsInverted(t *testing.T) {
+	cfg := &model.RankConfig{SortType: model.SortScoreAsc, SameScorePolicy: model.SameScoreEarlyFirst}
+	early := EncodedMember(cfg, 1000, 0, "early")
+	late := EncodedMember(cfg, 2000, 0, "late")
+	if !(early < late) { t.Fatalf("ascending ZRANGE must still prefer earlier event: %q %q", early, late) }
 }

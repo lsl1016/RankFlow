@@ -48,7 +48,9 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Run backend tests
-        run: go test ./...
+        # Integration packages share the same MySQL schema and Redis DB.
+        # Keep package execution serial so AutoMigrate/FlushDB cannot race.
+        run: go test -p 1 ./...
 
       - name: Build backend image
         run: docker build -f Dockerfile .
