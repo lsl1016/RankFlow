@@ -60,7 +60,9 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	}
-
+	if err := validateAuthEnabledEnv(); err != nil {
+		return nil, err
+	}
 	envOverrides().apply(cfg)
 	if err := validate(cfg); err != nil {
 		return nil, err
@@ -185,6 +187,17 @@ func validate(cfg *Config) error {
 	}
 	if cfg.AdminToken == cfg.WriterToken {
 		return fmt.Errorf("admin and writer tokens must be different")
+	}
+	return nil
+}
+
+func validateAuthEnabledEnv() error {
+	v, ok := os.LookupEnv("RANKFLOW_AUTH_ENABLED")
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	if _, err := strconv.ParseBool(v); err != nil {
+		return fmt.Errorf("invalid RANKFLOW_AUTH_ENABLED %q: %w", v, err)
 	}
 	return nil
 }
