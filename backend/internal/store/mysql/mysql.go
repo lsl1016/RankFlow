@@ -74,7 +74,7 @@ func (s *Store) UpdateRank(ctx context.Context, cfg *model.RankConfig, dims []mo
 		if err := tx.Model(&model.RankConfig{}).
 			Where("rank_id = ?", cfg.RankID).
 			Select("rank_name", "biz_code", "target_type", "sort_type", "same_score_policy",
-				"score_integer_digits", "max_rank_size", "cache_ttl_seconds", "start_time", "end_time").
+				"max_rank_size", "cache_ttl_seconds", "start_time", "end_time").
 			Updates(cfg).Error; err != nil {
 			return err
 		}
@@ -134,7 +134,6 @@ func (s *Store) GetTimeConfig(ctx context.Context, rankID int64) (*model.RankTim
 	return &tc, nil
 }
 
-// ListRanks returns a filtered, paginated list of rank configs.
 func (s *Store) ListRanks(ctx context.Context, name, bizCode string, status *int, offset, limit int) ([]model.RankConfig, int64, error) {
 	q := s.db.WithContext(ctx).Model(&model.RankConfig{})
 	if name != "" {
@@ -155,7 +154,6 @@ func (s *Store) ListRanks(ctx context.Context, name, bizCode string, status *int
 	return rows, total, err
 }
 
-// MaxRankID returns the current maximum rank_id, used to allocate the next id.
 func (s *Store) MaxRankID(ctx context.Context) (int64, error) {
 	var maxID *int64
 	err := s.db.WithContext(ctx).Model(&model.RankConfig{}).
@@ -169,10 +167,6 @@ func (s *Store) MaxRankID(ctx context.Context) (int64, error) {
 	return *maxID, nil
 }
 
-// --- member score persistence ---
-
-// UpsertMemberScore writes the latest score state for a member. It is called
-// asynchronously by the persist worker so Redis stays the hot path.
 func (s *Store) UpsertMemberScore(ctx context.Context, m *model.RankMemberScore) error {
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "rank_id"}, {Name: "type_id"}, {Name: "item_id"}},
@@ -188,8 +182,6 @@ func (s *Store) CountMembers(ctx context.Context, rankID int64, typeID string) (
 		Where("rank_id = ? AND type_id = ?", rankID, typeID).Count(&n).Error
 	return n, err
 }
-
-// --- sub board ---
 
 func (s *Store) UpsertSubBoard(ctx context.Context, sb *model.RankSubBoard) error {
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
