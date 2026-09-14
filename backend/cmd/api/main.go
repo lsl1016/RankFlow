@@ -14,6 +14,7 @@ import (
 	_ "rankflow/docs" // 由 swag 生成的 OpenAPI 文档，供 /swagger 路由加载
 
 	"rankflow/internal/api/handler"
+	"rankflow/internal/api/middleware"
 	"rankflow/internal/api/router"
 	"rankflow/internal/config"
 	"rankflow/internal/observability"
@@ -55,7 +56,11 @@ func main() {
 	metrics := observability.NewMetrics()
 	svc := service.New(myStore, rdStore, log, metrics)
 	h := handler.New(svc, metrics)
-	engine := router.New(h, log)
+	engine := router.New(h, log, middleware.AuthConfig{
+		Enabled:     cfg.AuthEnabled,
+		AdminToken:  cfg.AdminToken,
+		WriterToken: cfg.WriterToken,
+	})
 
 	// Async persist worker.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -65,7 +70,7 @@ func main() {
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: engine}
 	go func() {
-		log.Info("rankflow api listening", zap.String("addr", cfg.HTTPAddr))
+		log.Info("rankflow api listening", zap.String("addr", cfg.HTTPAddr), zap.Bool("authEnabled", cfg.AuthEnabled))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal("http server error", zap.Error(err))
 		}
