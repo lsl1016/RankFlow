@@ -8,6 +8,8 @@ import (
 	"rankflow/internal/model"
 )
 
+const missingDimensionToken = "~"
+
 // Compute builds the type_id for a sub-leaderboard from the time bucket and the
 // configured business dimensions. Layout: {time_bucket}_{dim1}_{dim2}_...
 //
@@ -30,9 +32,10 @@ func Compute(tc *model.RankTimeConfig, dims []model.RankDimensionConfig, dimValu
 			if d.Required == 1 {
 				return "", fmt.Errorf("missing required dimension %q", d.DimensionField)
 			}
-			v = "all"
+			parts = append(parts, missingDimensionToken)
+			continue
 		}
-		parts = append(parts, sanitize(v))
+		parts = append(parts, encodeDimensionValue(v))
 	}
 
 	if len(parts) == 0 {
@@ -47,7 +50,7 @@ func Compute(tc *model.RankTimeConfig, dims []model.RankDimensionConfig, dimValu
 func timeBucket(tc *model.RankTimeConfig, anchorTS int64) (string, error) {
 	loc, err := time.LoadLocation(tc.Timezone)
 	if err != nil {
-		loc = time.Local
+		return "", fmt.Errorf("invalid timezone %q: %w", tc.Timezone, err)
 	}
 	if anchorTS <= 0 {
 		anchorTS = time.Now().Unix()
@@ -62,7 +65,6 @@ func timeBucket(tc *model.RankTimeConfig, anchorTS int64) (string, error) {
 		start := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 		return fmt.Sprint(start.Unix()), nil
 	case model.TimeWeek:
-		// ISO-ish: shift to Monday.
 		weekday := int(t.Weekday())
 		if weekday == 0 {
 			weekday = 7
@@ -78,16 +80,22 @@ func timeBucket(tc *model.RankTimeConfig, anchorTS int64) (string, error) {
 		start := time.Date(t.Year(), startMonth, 1, 0, 0, 0, 0, loc)
 		return fmt.Sprint(start.Unix()), nil
 	case model.TimeCustom:
-		// Custom periods are anchored on the rank's start_time elsewhere; for
-		// MVP we treat the whole rank as a single bucket.
 		return "custom", nil
 	default:
 		return "", fmt.Errorf("unsupported time type %q", tc.TimeType)
 	}
 }
 
-// sanitize removes the underscore separator from dimension values to avoid
-// ambiguous type_id parsing.
-func sanitize(v string) string {
-	return strings.ReplaceAll(v, "_", "-")
+// encodeDimensionValue escapes characters that have structural meaning in a
+// type_id. It deliberately leaves ordinary values unchanged for compatibility:
+// "community" remains "community", while "a_b" becomes "a%5Fb". The percent
+// sign is escaped first so the encoding is injective, and "~" is reserved for
+// a missing optional dimension.
+func encodeDimensionValue(v string) string {
+	replacer := strings.NewReplacer(
+		"%", "%25",
+		"_", "%5F",
+		"~", "%7E",
+	)
+	return replacer.Replace(v)
 }
