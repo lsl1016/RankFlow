@@ -62,3 +62,10 @@ func TestAuthEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("unexpected auth env config: %+v", cfg)
 	}
 }
+
+func TestMalformedAuthEnabledEnvironmentIsRejected(t *testing.T) {
+	t.Setenv("RANKFLOW_AUTH_ENABLED", "tru")
+	if err := validateAuthEnabledEnv(); err == nil {
+		t.Fatal("expected malformed RANKFLOW_AUTH_ENABLED to be rejected")
+	}
+}
