@@ -10,8 +10,9 @@ import (
 	"rankflow/internal/api/middleware"
 )
 
-// New builds the Gin engine with all routes wired.
-func New(h *handler.Handler, log *zap.Logger) *gin.Engine {
+// New builds the Gin engine with public query routes plus isolated writer and
+// administrator permission groups. URLs stay backward compatible.
+func New(h *handler.Handler, log *zap.Logger, auth middleware.AuthConfig) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(middleware.RequestContext(log), middleware.AccessLog(log), middleware.Recovery(log), middleware.CORS())
@@ -20,28 +21,36 @@ func New(h *handler.Handler, log *zap.Logger) *gin.Engine {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// Swagger UI: http://<host>/swagger/index.html
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger describes configuration/write APIs, so production access is admin-only.
+	r.GET("/swagger/*any", middleware.RequireAdmin(auth), ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	api := r.Group("/api")
+
+	// Ranking reads are intentionally public and have no subboard-persistence side effects.
+	api.GET("/ranks/:rankId/top", h.Top)
+	api.GET("/ranks/:rankId/members/:itemId/rank", h.MemberRank)
+	api.GET("/ranks/:rankId/members/:itemId/around", h.Around)
+	api.GET("/ranks/:rankId/stats", h.Stats)
+
+	writer := api.Group("")
+	writer.Use(middleware.RequireWriter(auth))
 	{
-		api.POST("/ranks", h.CreateRank)
-		api.GET("/ranks", h.ListRanks)
-		api.GET("/ranks/:rankId", h.GetRank)
-		api.PUT("/ranks/:rankId", h.UpdateRank)
-		api.POST("/ranks/:rankId/status", h.SetStatus)
-		api.GET("/ranks/:rankId/subboards", h.ListSubBoards)
-		api.POST("/ranks/:rankId/subboards", h.ResolveSubBoard)
-		api.POST("/ranks/:rankId/subboards/status", h.SetSubBoardStatus)
+		writer.POST("/ranks/:rankId/score/add", h.AddScore)
+		writer.POST("/ranks/:rankId/score/set", h.SetScore)
+		writer.POST("/ranks/:rankId/score/batch", h.BatchAddScore)
+	}
 
-		api.POST("/ranks/:rankId/score/add", h.AddScore)
-		api.POST("/ranks/:rankId/score/set", h.SetScore)
-		api.POST("/ranks/:rankId/score/batch", h.BatchAddScore)
-
-		api.GET("/ranks/:rankId/top", h.Top)
-		api.GET("/ranks/:rankId/members/:itemId/rank", h.MemberRank)
-		api.GET("/ranks/:rankId/members/:itemId/around", h.Around)
-		api.GET("/ranks/:rankId/stats", h.Stats)
+	admin := api.Group("")
+	admin.Use(middleware.RequireAdmin(auth))
+	{
+		admin.POST("/ranks", h.CreateRank)
+		admin.GET("/ranks", h.ListRanks)
+		admin.GET("/ranks/:rankId", h.GetRank)
+		admin.PUT("/ranks/:rankId", h.UpdateRank)
+		admin.POST("/ranks/:rankId/status", h.SetStatus)
+		admin.GET("/ranks/:rankId/subboards", h.ListSubBoards)
+		admin.POST("/ranks/:rankId/subboards", h.ResolveSubBoard)
+		admin.POST("/ranks/:rankId/subboards/status", h.SetSubBoardStatus)
 	}
 
 	return r
