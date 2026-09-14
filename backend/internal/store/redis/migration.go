@@ -46,3 +46,21 @@ func (s *Store) MigrateLegacyBoard(ctx context.Context, rankID int64, typeID str
 	_, err = pipe.Exec(ctx)
 	return err
 }
+
+// TrimBoard applies the configured materialized leaderboard size after a bulk
+// rebuild. Per-write Lua scripts enforce the same rule on the hot path.
+func (s *Store) TrimBoard(ctx context.Context, rankID int64, typeID string, maxSize int, sortDesc bool) error {
+	if maxSize <= 0 {
+		return nil
+	}
+	key := ZSetKey(rankID, typeID)
+	total, err := s.rdb.ZCard(ctx, key).Result()
+	if err != nil || total <= int64(maxSize) {
+		return err
+	}
+	excess := total - int64(maxSize)
+	if sortDesc {
+		return s.rdb.ZRemRangeByRank(ctx, key, 0, excess-1).Err()
+	}
+	return s.rdb.ZRemRangeByRank(ctx, key, -excess, -1).Err()
+}

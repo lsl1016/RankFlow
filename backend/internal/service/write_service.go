@@ -51,8 +51,34 @@ func (s *Service) anchorTS(rc *ResolvedConfig, eventTS int64) int64 {
 	return eventTS
 }
 
+// prepareBoard first migrates the old Redis index. If Redis was flushed or the
+// v2 index is otherwise missing, it rebuilds the ranking from persisted MySQL
+// member state. RestoreMemberIfNewer makes the rebuild safe against a concurrent
+// newer Redis write.
 func (s *Service) prepareBoard(ctx context.Context, rc *ResolvedConfig, rankID int64, typeID string) error {
-	return s.rd.MigrateLegacyBoard(ctx, rankID, typeID, &rc.Config)
+	if err := s.rd.MigrateLegacyBoard(ctx, rankID, typeID, &rc.Config); err != nil {
+		return err
+	}
+	hasBoard, err := s.rd.HasBoard(ctx, rankID, typeID)
+	if err != nil || hasBoard {
+		return err
+	}
+	rows, err := s.my.ListMemberScores(ctx, rankID, typeID)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		row := &rows[i]
+		anchor := int64(0)
+		if row.LastEventTime != nil {
+			anchor = row.LastEventTime.Unix()
+		}
+		encodedMember := score.EncodedMember(&rc.Config, anchor, row.SubScore, row.ItemID)
+		if err := s.rd.RestoreMemberIfNewer(ctx, rankID, typeID, row.ItemID, encodedMember, row.Score, row.Revision, row.FinalScore); err != nil {
+			return err
+		}
+	}
+	return s.rd.TrimBoard(ctx, rankID, typeID, rc.Config.MaxRankSize, score.IsDesc(&rc.Config))
 }
 
 func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput) (*ScoreResult, error) {
