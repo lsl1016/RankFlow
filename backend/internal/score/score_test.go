@@ -1,6 +1,7 @@
 package score
 
 import (
+	"math"
 	"testing"
 
 	"rankflow/internal/model"
@@ -41,5 +42,36 @@ func TestFinalKeepsIntegerOrdering(t *testing.T) {
 	high := Final(cfg, 101, 9999, 0)
 	if !(high > low) {
 		t.Fatalf("higher business score must win regardless of tie-break: low=%v high=%v", low, high)
+	}
+}
+
+func TestSubScoreIsMonotonicForSignedValues(t *testing.T) {
+	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreSubScore}
+	neg := SubDecimal(cfg, 0, -10)
+	zero := SubDecimal(cfg, 0, 0)
+	pos := SubDecimal(cfg, 0, 10)
+	if !(neg < zero && zero < pos) {
+		t.Fatalf("sub score mapping must be monotonic: neg=%v zero=%v pos=%v", neg, zero, pos)
+	}
+	if neg < 0 || pos >= 1 {
+		t.Fatalf("sub score fractions must stay inside [0,1): neg=%v pos=%v", neg, pos)
+	}
+}
+
+func TestNegativeSubScoreCannotCrossPrimaryScoreBoundaryDesc(t *testing.T) {
+	cfg := &model.RankConfig{SortType: model.SortScoreDesc, SameScorePolicy: model.SameScoreSubScore}
+	higherPrimary := Final(cfg, 100, 0, -200_000_000_000)
+	lowerPrimary := Final(cfg, 99, 0, math.MaxInt64)
+	if !(higherPrimary > lowerPrimary) {
+		t.Fatalf("primary score must dominate sub score: score100=%v score99=%v", higherPrimary, lowerPrimary)
+	}
+}
+
+func TestSubScoreCannotCrossPrimaryScoreBoundaryAsc(t *testing.T) {
+	cfg := &model.RankConfig{SortType: model.SortScoreAsc, SameScorePolicy: model.SameScoreSubScore}
+	lowerPrimary := Final(cfg, 99, 0, math.MinInt64)
+	higherPrimary := Final(cfg, 100, 0, math.MaxInt64)
+	if !(lowerPrimary < higherPrimary) {
+		t.Fatalf("primary score must dominate sub score for ascending rank: score99=%v score100=%v", lowerPrimary, higherPrimary)
 	}
 }
