@@ -84,8 +84,6 @@ func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput)
 		return nil, err
 	}
 
-	// Idempotency: claim the requestId before mutating. On any failure after
-	// the claim we release it so the event can be retried.
 	claimed := true
 	if in.RequestID != "" {
 		ttl := 24 * time.Hour
@@ -95,9 +93,18 @@ func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput)
 			return nil, err
 		}
 		if !claimed {
-			// Duplicate: return current state without re-adding.
-			rank, final, _ := s.rd.MemberRank(ctx, rankID, typeID, in.ItemID, score.IsDesc(&rc.Config))
-			cur, _ := s.rd.GetScore(ctx, rankID, typeID, in.ItemID)
+			rank, _, rankErr := s.rd.MemberRank(ctx, rankID, typeID, in.ItemID, score.IsDesc(&rc.Config))
+			if rankErr != nil {
+				return nil, rankErr
+			}
+			cur, scoreErr := s.rd.GetScore(ctx, rankID, typeID, in.ItemID)
+			if scoreErr != nil {
+				return nil, scoreErr
+			}
+			final, finalErr := s.rd.GetFinalScore(ctx, rankID, typeID, in.ItemID)
+			if finalErr != nil {
+				return nil, finalErr
+			}
 			s.logger(ctx).Info("add score idempotent duplicate ignored", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID), zap.Int64("score", cur), zap.Int("rank", rank), zap.Float64("final", final))
 			return &ScoreResult{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: cur, Rank: rank, Final: final}, nil
 		}
@@ -153,7 +160,7 @@ func (s *Service) SetScore(ctx context.Context, rankID int64, in *AddScoreInput)
 		return nil, err
 	}
 	final := score.Final(&rc.Config, in.Score, anchor, in.SubScore)
-	if err := s.rd.SetFinalScore(ctx, rankID, typeID, in.ItemID, in.Score, final); err != nil {
+	if err := s.rd.SetFinalScore(ctx, rankID, typeID, in.ItemID, in.Score, final, rc.Config.MaxRankSize, score.IsDesc(&rc.Config)); err != nil {
 		s.logFailure(ctx, "set final score failed", err, zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.String("itemId", in.ItemID), zap.String("requestId", in.RequestID), zap.Int64("score", in.Score), zap.Float64("final", final))
 		return nil, err
 	}
