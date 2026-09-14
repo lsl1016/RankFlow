@@ -57,3 +57,52 @@ func TestComputeDayBucketStable(t *testing.T) {
 		t.Fatalf("different day must produce different bucket")
 	}
 }
+
+func TestComputeEscapesUnderscoreWithoutCollidingWithHyphen(t *testing.T) {
+	tc := &model.RankTimeConfig{TimeType: model.TimeNone}
+	dims := []model.RankDimensionConfig{{DimensionField: "kind", Required: 1}}
+	withUnderscore, err := Compute(tc, dims, map[string]string{"kind": "a_b"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withHyphen, err := Compute(tc, dims, map[string]string{"kind": "a-b"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withUnderscore == withHyphen {
+		t.Fatalf("dimension values must not collide: underscore=%q hyphen=%q", withUnderscore, withHyphen)
+	}
+	if withUnderscore != "a%5Fb" {
+		t.Fatalf("unexpected escaped value: %q", withUnderscore)
+	}
+}
+
+func TestComputeMissingOptionalDoesNotCollideWithLiteralValue(t *testing.T) {
+	tc := &model.RankTimeConfig{TimeType: model.TimeNone}
+	dims := []model.RankDimensionConfig{{DimensionField: "kind", Required: 0}}
+	missing, err := Compute(tc, dims, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	literalAll, err := Compute(tc, dims, map[string]string{"kind": "all"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	literalToken, err := Compute(tc, dims, map[string]string{"kind": "~"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing == literalAll || missing == literalToken {
+		t.Fatalf("missing optional dimension must be reserved: missing=%q all=%q token=%q", missing, literalAll, literalToken)
+	}
+	if missing != "~" || literalToken != "%7E" {
+		t.Fatalf("unexpected optional dimension encoding: missing=%q token=%q", missing, literalToken)
+	}
+}
+
+func TestComputeInvalidTimezoneErrors(t *testing.T) {
+	tc := &model.RankTimeConfig{TimeType: model.TimeDay, Timezone: "Asia/Shangahi"}
+	if _, err := Compute(tc, nil, nil, time.Now().Unix()); err == nil {
+		t.Fatal("expected invalid timezone to return an error")
+	}
+}
