@@ -69,7 +69,7 @@
         <div style="color: #999; margin-top: 6px">不配置维度则为全站单榜；维度按顺序拼接生成 type_id。</div>
       </a-form-item>
 
-      <a-form-item :wrapper-col="{ offset: 5 }">
+      <a-form-item v-if="!isEdit" :wrapper-col="{ offset: 5 }">
         <a-checkbox v-model:checked="form.online">保存后立即上线</a-checkbox>
       </a-form-item>
       <a-form-item :wrapper-col="{ offset: 5 }">
@@ -128,7 +128,6 @@ async function load() {
       dimensionField: d.dimensionField,
       required: d.required === true || d.required === 1,
     })),
-    online: c.status === 1,
   })
 }
 
