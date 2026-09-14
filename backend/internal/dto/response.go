@@ -7,18 +7,20 @@ package dto
 
 // Response 是所有 HTTP 接口的统一返回信封。
 type Response struct {
-	Code    int    `json:"code"`              // 业务状态码：0 表示成功，非 0 表示失败
-	Message string `json:"message"`           // 提示信息：成功为 "success"，失败为错误描述
-	Data    any    `json:"data,omitempty"`    // 业务数据载荷：失败时为空
+	Code    int    `json:"code"`           // 业务状态码：0 表示成功，非 0 表示失败
+	Message string `json:"message"`        // 提示信息：成功为 "success"，失败为错误描述
+	Data    any    `json:"data,omitempty"` // 业务数据载荷：失败时为空
 }
 
-// 业务状态码常量。HTTP 状态码由 handler 单独决定，这里只表达业务语义。
+// 业务状态码常量。HTTP 状态码由 handler / middleware 单独决定，这里只表达业务语义。
 const (
-	CodeOK         = 0    // 成功
-	CodeValidation = 4000 // 参数校验失败
-	CodeNotFound   = 4040 // 资源不存在
-	CodeConflict   = 4090 // 状态冲突（如榜单未上线）
-	CodeInternal   = 5000 // 服务内部错误
+	CodeOK           = 0    // 成功
+	CodeValidation   = 4000 // 参数校验失败
+	CodeUnauthorized = 4010 // 未提供或提供了无效凭证
+	CodeForbidden    = 4030 // 已认证但权限不足
+	CodeNotFound     = 4040 // 资源不存在
+	CodeConflict     = 4090 // 状态冲突或幂等键冲突
+	CodeInternal     = 5000 // 服务内部错误
 )
 
 // Success 构造一个成功响应。

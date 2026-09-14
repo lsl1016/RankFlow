@@ -9,3 +9,10 @@ redis:
   db: 0
 
 persistWorkers: 2
+
+auth:
+  # Local development stays open by default. Production compose enables auth
+  # explicitly and requires both tokens through environment variables.
+  enabled: false
+  adminToken: ""
+  writerToken: ""

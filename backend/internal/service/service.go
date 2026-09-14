@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("rank not found")
-	ErrNotOnline  = errors.New("rank is not online")
-	ErrValidation = errors.New("validation error")
+	ErrNotFound            = errors.New("rank not found")
+	ErrNotOnline           = errors.New("rank is not online")
+	ErrValidation          = errors.New("validation error")
+	ErrIdempotencyConflict = errors.New("idempotency request conflict")
 )
 
 // ResolvedConfig bundles a rank's base config with its dimension and time
@@ -46,7 +47,7 @@ func (s *Service) logger(ctx context.Context, fields ...zap.Field) *zap.Logger {
 func (s *Service) logFailure(ctx context.Context, msg string, err error, fields ...zap.Field) {
 	fields = append(fields, zap.Error(err))
 	log := s.logger(ctx)
-	if errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrNotOnline) {
+	if errors.Is(err, ErrValidation) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrNotOnline) || errors.Is(err, ErrIdempotencyConflict) {
 		log.Warn(msg, fields...)
 		return
 	}

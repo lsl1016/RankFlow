@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -12,6 +16,7 @@ import (
 	"rankflow/internal/model"
 	"rankflow/internal/observability"
 	"rankflow/internal/score"
+	redisstore "rankflow/internal/store/redis"
 )
 
 type PersistJob struct {
@@ -42,6 +47,15 @@ type ScoreResult struct {
 	Score  int64   `json:"score"`
 	Rank   int     `json:"rank"`
 	Final  float64 `json:"final"`
+}
+
+type writeFingerprintPayload struct {
+	Operation  string            `json:"operation"`
+	ItemID     string            `json:"itemId"`
+	Score      int64             `json:"score"`
+	SubScore   int64             `json:"subScore"`
+	EventTime  int64             `json:"eventTime"`
+	Dimensions map[string]string `json:"dimensions"`
 }
 
 func (s *Service) anchorTS(rc *ResolvedConfig, eventTS int64) int64 {
@@ -81,92 +95,190 @@ func (s *Service) prepareBoard(ctx context.Context, rc *ResolvedConfig, rankID i
 	return s.rd.TrimBoard(ctx, rankID, typeID, rc.Config.MaxRankSize, score.IsDesc(&rc.Config))
 }
 
-func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput) (*ScoreResult, error) {
-	rc, err := s.resolve(ctx, rankID)
-	if err != nil { return nil, err }
-	if rc.Config.Status != model.StatusOnline { return nil, ErrNotOnline }
-	if in.ItemID == "" { return nil, fmt.Errorf("%w: itemId is required", ErrValidation) }
-
-	anchor := s.anchorTS(rc, in.EventTime)
-	typeID, err := dimension.Compute(&rc.Time, rc.Dimensions, in.Dimensions, anchor)
-	if err != nil { return nil, fmt.Errorf("%w: %v", ErrValidation, err) }
-	if err := s.requireSubBoardOnline(ctx, rankID, typeID, in.Dimensions); err != nil { return nil, err }
-	if err := s.prepareBoard(ctx, rc, rankID, typeID); err != nil { return nil, err }
-
-	if in.RequestID != "" {
-		claimed, err := s.rd.ClaimIdempotency(ctx, rankID, in.RequestID, 24*time.Hour)
-		if err != nil { return nil, err }
-		if !claimed {
-			rank, _, err := s.rd.MemberRank(ctx, rankID, typeID, in.ItemID, score.IsDesc(&rc.Config))
-			if err != nil { return nil, err }
-			cur, err := s.rd.GetScore(ctx, rankID, typeID, in.ItemID)
-			if err != nil { return nil, err }
-			final, err := s.rd.GetFinalScore(ctx, rankID, typeID, in.ItemID)
-			if err != nil { return nil, err }
-			return &ScoreResult{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: cur, Rank: rank, Final: final}, nil
-		}
-	}
-
-	encodedMember := score.EncodedMember(&rc.Config, anchor, in.SubScore, in.ItemID)
-	subDecimal := score.SubDecimal(&rc.Config, anchor, in.SubScore)
-	newScore, revision, final, err := s.rd.AddFinalScore(ctx, rankID, typeID, in.ItemID, encodedMember, in.Score, subDecimal, rc.Config.MaxRankSize, score.IsDesc(&rc.Config))
+func writeFingerprint(operation string, in *AddScoreInput) (string, error) {
+	payload, err := json.Marshal(writeFingerprintPayload{
+		Operation:  operation,
+		ItemID:     in.ItemID,
+		Score:      in.Score,
+		SubScore:   in.SubScore,
+		EventTime:  in.EventTime,
+		Dimensions: in.Dimensions,
+	})
 	if err != nil {
-		if in.RequestID != "" { s.rd.ReleaseIdempotency(ctx, rankID, in.RequestID) }
-		return nil, err
+		return "", err
 	}
-	if err := s.enqueue(ctx, &PersistJob{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: newScore, SubScore: in.SubScore, Final: final, Revision: revision, EventTime: anchor}); err != nil {
-		return nil, err
-	}
-
-	rank, _, err := s.rd.MemberRank(ctx, rankID, typeID, in.ItemID, score.IsDesc(&rc.Config))
-	if err != nil { return nil, err }
-	s.logger(ctx).Debug("add score succeeded", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.String("itemId", in.ItemID), zap.Int64("score", newScore), zap.Int64("revision", revision), zap.Int("rank", rank))
-	return &ScoreResult{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: newScore, Rank: rank, Final: final}, nil
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Service) SetScore(ctx context.Context, rankID int64, in *AddScoreInput) (*ScoreResult, error) {
+func (s *Service) existingWriteResult(ctx context.Context, rankID int64, requestID, fingerprint string) (*ScoreResult, bool, error) {
+	if requestID == "" {
+		return nil, false, nil
+	}
+	record, found, err := s.rd.GetIdempotencyRecord(ctx, rankID, requestID)
+	if errors.Is(err, redisstore.ErrLegacyIdempotencyRecord) {
+		return nil, true, fmt.Errorf("%w: requestId %q was claimed by a previous RankFlow version", ErrIdempotencyConflict, requestID)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if record.Fingerprint != fingerprint {
+		return nil, true, fmt.Errorf("%w: requestId %q was already used for a different write", ErrIdempotencyConflict, requestID)
+	}
 	rc, err := s.resolve(ctx, rankID)
-	if err != nil { return nil, err }
-	if rc.Config.Status != model.StatusOnline { return nil, ErrNotOnline }
-	if in.ItemID == "" { return nil, fmt.Errorf("%w: itemId is required", ErrValidation) }
-	if in.Score > score.MaxExactBusinessScore || in.Score < -score.MaxExactBusinessScore {
+	if err != nil {
+		return nil, true, err
+	}
+	if err := s.prepareBoard(ctx, rc, rankID, record.TypeID); err != nil {
+		return nil, true, err
+	}
+	rank, _, err := s.rd.MemberRank(ctx, rankID, record.TypeID, record.ItemID, score.IsDesc(&rc.Config))
+	if err != nil {
+		return nil, true, err
+	}
+	return &ScoreResult{
+		RankID: rankID,
+		TypeID: record.TypeID,
+		ItemID: record.ItemID,
+		Score:  record.Score,
+		Rank:   rank,
+		Final:  record.Final,
+	}, true, nil
+}
+
+func (s *Service) writeScore(ctx context.Context, rankID int64, mode string, in *AddScoreInput) (*ScoreResult, error) {
+	if in.ItemID == "" {
+		return nil, fmt.Errorf("%w: itemId is required", ErrValidation)
+	}
+	if mode == redisstore.WriteModeAdd && strings.TrimSpace(in.RequestID) == "" {
+		return nil, fmt.Errorf("%w: requestId is required for additive score writes", ErrValidation)
+	}
+	if len(in.ItemID) > 128 {
+		return nil, fmt.Errorf("%w: itemId exceeds 128 characters", ErrValidation)
+	}
+	if len(in.RequestID) > 256 {
+		return nil, fmt.Errorf("%w: requestId exceeds 256 characters", ErrValidation)
+	}
+	fingerprint, err := writeFingerprint(mode, in)
+	if err != nil {
+		return nil, err
+	}
+	if result, found, err := s.existingWriteResult(ctx, rankID, in.RequestID, fingerprint); found || err != nil {
+		return result, err
+	}
+
+	rc, err := s.resolve(ctx, rankID)
+	if err != nil {
+		return nil, err
+	}
+	if rc.Config.Status != model.StatusOnline {
+		return nil, ErrNotOnline
+	}
+	if mode == redisstore.WriteModeSet && (in.Score > score.MaxExactBusinessScore || in.Score < -score.MaxExactBusinessScore) {
 		return nil, fmt.Errorf("%w: score exceeds exact Redis range", ErrValidation)
 	}
 
 	anchor := s.anchorTS(rc, in.EventTime)
 	typeID, err := dimension.Compute(&rc.Time, rc.Dimensions, in.Dimensions, anchor)
-	if err != nil { return nil, fmt.Errorf("%w: %v", ErrValidation, err) }
-	if err := s.requireSubBoardOnline(ctx, rankID, typeID, in.Dimensions); err != nil { return nil, err }
-	if err := s.prepareBoard(ctx, rc, rankID, typeID); err != nil { return nil, err }
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := s.requireSubBoardOnline(ctx, rankID, typeID, in.Dimensions); err != nil {
+		return nil, err
+	}
+	if err := s.prepareBoard(ctx, rc, rankID, typeID); err != nil {
+		return nil, err
+	}
 
-	final := score.Final(&rc.Config, in.Score, anchor, in.SubScore)
-	encodedMember := score.EncodedMember(&rc.Config, anchor, in.SubScore, in.ItemID)
-	revision, err := s.rd.SetFinalScore(ctx, rankID, typeID, in.ItemID, encodedMember, in.Score, final, rc.Config.MaxRankSize, score.IsDesc(&rc.Config))
-	if err != nil { return nil, err }
-	if err := s.enqueue(ctx, &PersistJob{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: in.Score, SubScore: in.SubScore, Final: final, Revision: revision, EventTime: anchor}); err != nil { return nil, err }
+	atomicResult, err := s.rd.WriteScoreAtomic(ctx, redisstore.AtomicWriteRequest{
+		Mode:           mode,
+		RankID:         rankID,
+		TypeID:         typeID,
+		ItemID:         in.ItemID,
+		EncodedMember:  score.EncodedMember(&rc.Config, anchor, in.SubScore, in.ItemID),
+		Value:          in.Score,
+		SubScore:       in.SubScore,
+		EventTime:      anchor,
+		SubDecimal:     score.SubDecimal(&rc.Config, anchor, in.SubScore),
+		MaxSize:        rc.Config.MaxRankSize,
+		SortDesc:       score.IsDesc(&rc.Config),
+		RequestID:      in.RequestID,
+		Fingerprint:    fingerprint,
+		IdempotencyTTL: 24 * time.Hour,
+		TraceID:        observability.TraceID(ctx),
+	})
+	if errors.Is(err, redisstore.ErrLegacyIdempotencyRecord) {
+		return nil, fmt.Errorf("%w: requestId %q was claimed by a previous RankFlow version", ErrIdempotencyConflict, in.RequestID)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "score exceeds exact Redis range") {
+			return nil, fmt.Errorf("%w: score exceeds exact Redis range", ErrValidation)
+		}
+		return nil, err
+	}
+	if atomicResult.Conflict {
+		return nil, fmt.Errorf("%w: requestId %q was already used for a different write", ErrIdempotencyConflict, in.RequestID)
+	}
 
-	rank, _, err := s.rd.MemberRank(ctx, rankID, typeID, in.ItemID, score.IsDesc(&rc.Config))
-	if err != nil { return nil, err }
-	return &ScoreResult{RankID: rankID, TypeID: typeID, ItemID: in.ItemID, Score: in.Score, Rank: rank, Final: final}, nil
+	resultTypeID := atomicResult.TypeID
+	resultItemID := atomicResult.ItemID
+	if resultTypeID == "" {
+		resultTypeID = typeID
+	}
+	if resultItemID == "" {
+		resultItemID = in.ItemID
+	}
+	// A concurrent duplicate can cross a request-time bucket boundary. In that
+	// case the Lua script returns the first write's stored typeId, so query the
+	// original board rather than the retry's newly computed one.
+	if resultTypeID != typeID {
+		if err := s.prepareBoard(ctx, rc, rankID, resultTypeID); err != nil {
+			return nil, err
+		}
+	}
+	rank, _, err := s.rd.MemberRank(ctx, rankID, resultTypeID, resultItemID, score.IsDesc(&rc.Config))
+	if err != nil {
+		return nil, err
+	}
+	s.logger(ctx).Debug("score write succeeded",
+		zap.Int64("rankId", rankID),
+		zap.String("typeId", resultTypeID),
+		zap.String("itemId", resultItemID),
+		zap.String("mode", mode),
+		zap.Bool("duplicate", atomicResult.Duplicate),
+		zap.Int64("score", atomicResult.Score),
+		zap.Int64("revision", atomicResult.Revision),
+		zap.Int("rank", rank),
+	)
+	return &ScoreResult{
+		RankID: rankID,
+		TypeID: resultTypeID,
+		ItemID: resultItemID,
+		Score:  atomicResult.Score,
+		Rank:   rank,
+		Final:  atomicResult.Final,
+	}, nil
+}
+
+func (s *Service) AddScore(ctx context.Context, rankID int64, in *AddScoreInput) (*ScoreResult, error) {
+	return s.writeScore(ctx, rankID, redisstore.WriteModeAdd, in)
+}
+
+func (s *Service) SetScore(ctx context.Context, rankID int64, in *AddScoreInput) (*ScoreResult, error) {
+	return s.writeScore(ctx, rankID, redisstore.WriteModeSet, in)
 }
 
 func (s *Service) BatchAddScore(ctx context.Context, rankID int64, items []AddScoreInput) ([]ScoreResult, error) {
 	results := make([]ScoreResult, 0, len(items))
 	for i := range items {
 		r, err := s.AddScore(ctx, rankID, &items[i])
-		if err != nil { return results, err }
+		if err != nil {
+			return results, err
+		}
 		results = append(results, *r)
 	}
 	return results, nil
-}
-
-func (s *Service) enqueue(ctx context.Context, job *PersistJob) error {
-	if job.TraceID == "" { job.TraceID = observability.TraceID(ctx) }
-	payload, err := json.Marshal(job)
-	if err != nil { return err }
-	if err := s.rd.EnqueuePersist(ctx, string(payload)); err != nil {
-		s.logFailure(ctx, "enqueue persist failed", err, zap.Int64("rankId", job.RankID), zap.String("typeId", job.TypeID), zap.String("itemId", job.ItemID), zap.Int64("revision", job.Revision))
-		return err
-	}
-	return nil
 }

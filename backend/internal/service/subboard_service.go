@@ -24,11 +24,14 @@ type SubBoard struct {
 }
 
 func (s *Service) ResolveSubBoard(ctx context.Context, rankID int64, dims map[string]string, ts int64) (*SubBoard, error) {
-	_, typeID, err := s.typeIDFor(ctx, rankID, dims, ts)
+	rc, typeID, err := s.computeTypeID(ctx, rankID, dims, ts)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.ensureSubBoard(ctx, rankID, typeID, dims); err != nil {
+		return nil, err
+	}
+	if err := s.prepareBoard(ctx, rc, rankID, typeID); err != nil {
 		return nil, err
 	}
 	return s.GetSubBoard(ctx, rankID, typeID)

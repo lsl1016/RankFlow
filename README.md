@@ -2,15 +2,18 @@
 
 可配置、可复用的榜单基础服务。基于设计文档 [`docs/通用榜单服务.md`](docs/通用榜单服务.md) 的 MVP 范围实现。
 
-技术栈：**Go (Gin + GORM) · Redis ZSet · MySQL · Vue3 + Ant Design Vue**。
+技术栈：**Go (Gin + GORM) · Redis ZSet / Streams · MySQL · Vue3 + Ant Design Vue**。
 
 ## 能力范围（MVP）
 
 - 榜单配置：创建 / 编辑 / 上下线，维度配置（全站 / 自定义维度 / 时间维度日榜·月榜等）
-- 分数更新：`addScore` / `setScore` / `batchAddScore`，基于 `requestId` 的幂等
-- 排名存储：Redis ZSet 实现 TopN、我的排名、周边排名
-- 排序：业务分 + 二级排序（先到优先 / 后到优先 / 自定义），支持升/降序
-- 持久化：Redis 实时更新 + 异步队列落库 MySQL
+- 分数更新：`addScore` / `setScore` / `batchAddScore`
+- 原子写入：单次 Redis Lua 同时完成分数、排名索引、revision、幂等结果和 Stream 持久化消息
+- 排名存储：Redis ZSet 实现 TopN、我的排名、周边排名；主分写 ZSet score，同分顺序编码在 member 中，避免大分数 float64 精度丢失
+- 排序：先到优先 / 后到优先 / 自定义二级分，支持升/降序
+- 持久化：Redis Streams Consumer Group 异步落库 MySQL，revision 防止多 Worker 乱序覆盖
+- 恢复：支持旧 ZSet 惰性迁移及 MySQL → Redis 排名重建
+- API 权限：公开查询、Writer 写分、Admin 配置管理三层隔离
 - 管理后台：榜单列表、新建/编辑、详情页（实时排名 + 概览 + 测试加分）
 - 可观测：结构化访问日志、QPS / 缓存命中率基础指标
 
@@ -18,23 +21,23 @@
 
 ## 目录结构
 
-```
+```text
 RankFlow/
 ├── backend/              # Go 服务
 │   ├── cmd/api           # HTTP 入口 + 异步落库 worker
 │   ├── internal/
-│   │   ├── config/       # TOML 配置
+│   │   ├── config/       # YAML / 环境变量配置
 │   │   ├── model/        # GORM 模型
 │   │   ├── store/        # mysql / redis 仓储
 │   │   ├── dimension/    # type_id 维度计算
-│   │   ├── score/        # final_score 排序分计算
+│   │   ├── score/        # 同分顺序编码
 │   │   ├── service/      # 配置 / 写入 / 查询服务
-│   │   ├── queue/        # Redis 异步落库 worker
+│   │   ├── queue/        # Redis Streams 异步落库 worker
 │   │   ├── api/          # handler / middleware / router
 │   │   └── observability/# 日志 + 指标
 │   └── deployments/init.sql
 ├── web-admin/            # Vue3 + Ant Design Vue 管理后台
-└── docker-compose.yml    # MySQL + Redis
+└── docker-compose.yml    # 本地 MySQL + Redis
 ```
 
 ## 快速开始
@@ -51,11 +54,21 @@ docker compose up -d
 
 ```bash
 cd backend
-cp conf/app.toml.example conf/app.toml
-# edit conf/app.toml for remote MySQL/Redis when needed
+# 默认读取 backend/config.yaml，可用 RANKFLOW_* 环境变量覆盖
 go run ./cmd/api
-# 监听 :8080，默认读取 backend/config.yaml，可用环境变量覆盖
+# 默认监听 :8080
 ```
+
+本地 `backend/config.yaml` 默认关闭 API 鉴权，便于开发。需要本地验证鉴权时可设置：
+
+```bash
+export RANKFLOW_AUTH_ENABLED=true
+export RANKFLOW_ADMIN_TOKEN='replace-with-admin-secret'
+export RANKFLOW_WRITER_TOKEN='replace-with-writer-secret'
+go run ./cmd/api
+```
+
+启用鉴权时 Admin / Writer token 都必须非空且互不相同，否则服务拒绝启动。
 
 ### 3. 启动管理后台
 
@@ -66,88 +79,126 @@ npm run dev
 # 打开 http://localhost:5173 ，/api 已代理到 :8080
 ```
 
+生产鉴权开启后，管理后台右上角可设置 Admin Token。Token 只保存在当前浏览器会话的 `sessionStorage` 中，并通过 `Authorization: Bearer <token>` 发送。
+
 ## 核心概念
 
-- 榜单实例 = `rank_id + type_id`；`type_id` 由「时间桶 + 横向维度」拼接生成。
-- 成员 = `item_id`；排序使用 `final_score`（整数位=业务分，小数位=二级排序）。
-- Redis Key 约定见设计文档第 9 章；幂等键 `rank:idem:{rank_id}:{request_id}`。
+- 榜单实例 = `rank_id + type_id`；`type_id` 由「时间桶 + 横向维度」生成。
+- 成员 = `item_id`。
+- Redis ZSet 的 score 只保存业务主分；同分顺序由固定宽度 member 前缀表达，因此不再依赖 `final_score` 小数精度。
+- `final_score` 保留用于兼容展示 / MySQL 落库，不再作为 Redis 排名依据。
+- 查询接口不会创建 `rank_sub_board`。子榜只会由显式 `POST /subboards` 或写分路径物化。
+
+## API 权限
+
+生产环境使用两个独立 Bearer Token：
+
+- **Public**：无需 Token，仅可查询排名。
+- **Writer**：`RANKFLOW_WRITER_TOKEN`，可执行写分接口。
+- **Admin**：`RANKFLOW_ADMIN_TOKEN`，可执行所有管理接口，并自动拥有 Writer 权限。
+
+权限边界：
+
+| 权限 | 接口 |
+|---|---|
+| Public | `GET /api/ranks/{id}/top`、`GET /members/{itemId}/rank`、`GET /members/{itemId}/around`、`GET /stats` |
+| Writer | `POST /api/ranks/{id}/score/add`、`score/set`、`score/batch` |
+| Admin | 榜单创建 / 查询配置 / 编辑 / 上下线 / 子榜管理，以及 `/swagger/*` |
+
+管理接口携带：
+
+```text
+Authorization: Bearer <RANKFLOW_ADMIN_TOKEN>
+```
+
+写分调用方可使用 Writer Token；Admin Token 同样可调用写分接口。Token 不支持通过 query string 传递。
+
+## 写分与幂等
+
+`score/add` 是增量操作，**`requestId` 必填**。同一 `rankId + requestId`：
+
+- 完全相同的请求重试：返回第一次写入结果，不重复加分，也不重复产生 Stream 消息。
+- 请求内容不同：返回 HTTP `409`，拒绝复用幂等键。
+- 分数更新、revision、ZSet、幂等记录、Redis Stream `XADD` 在同一 Lua 脚本中执行。
+
+示例：
+
+```json
+{
+  "requestId": "order-20260915-0001",
+  "itemId": "user_10086",
+  "score": 10,
+  "subScore": 0,
+  "eventTime": 1789400000,
+  "dimensions": {}
+}
+```
+
+`score/set` 是绝对值覆盖；可不传 `requestId`，如果传入则同样启用幂等冲突检测。
 
 ## API 速览
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/ranks` | 创建榜单 |
-| GET | `/api/ranks` | 列表（name/bizCode/status/page/size） |
-| GET | `/api/ranks/{id}` | 详情（含维度/时间配置） |
-| PUT | `/api/ranks/{id}` | 编辑 |
-| POST | `/api/ranks/{id}/status` | 上下线 `{status}` |
-| POST | `/api/ranks/{id}/score/add` | 加分（幂等） |
-| POST | `/api/ranks/{id}/score/set` | 设置分数 |
-| POST | `/api/ranks/{id}/score/batch` | 批量加分 `{items:[...]}` |
-| GET | `/api/ranks/{id}/top` | TopN（`offset/limit/timestamp/dim_*`） |
-| GET | `/api/ranks/{id}/members/{itemId}/rank` | 我的排名 |
-| GET | `/api/ranks/{id}/members/{itemId}/around` | 周边排名（`before/after`） |
-| GET | `/api/ranks/{id}/stats` | 实时概览 |
+| POST | `/api/ranks` | 创建榜单（Admin） |
+| GET | `/api/ranks` | 配置列表（Admin） |
+| GET | `/api/ranks/{id}` | 配置详情（Admin） |
+| PUT | `/api/ranks/{id}` | 编辑（Admin） |
+| POST | `/api/ranks/{id}/status` | 上下线（Admin） |
+| GET | `/api/ranks/{id}/subboards` | 子榜列表（Admin） |
+| POST | `/api/ranks/{id}/subboards` | 显式创建/解析子榜（Admin） |
+| POST | `/api/ranks/{id}/subboards/status` | 子榜上下线（Admin） |
+| POST | `/api/ranks/{id}/score/add` | 加分（Writer，`requestId` 必填） |
+| POST | `/api/ranks/{id}/score/set` | 设置分数（Writer） |
+| POST | `/api/ranks/{id}/score/batch` | 批量加分（Writer，每项 `requestId` 必填） |
+| GET | `/api/ranks/{id}/top` | TopN（Public） |
+| GET | `/api/ranks/{id}/members/{itemId}/rank` | 我的排名（Public） |
+| GET | `/api/ranks/{id}/members/{itemId}/around` | 周边排名（Public） |
+| GET | `/api/ranks/{id}/stats` | 实时概览（Public） |
 
 查询子榜维度通过 `dim_` 前缀传参，例如 `?dim_business_id=community&dim_category_id=tech`。
 
-## DTO 分层与参数绑定
-
-传输层与领域层解耦：
-
-- `internal/dto`：HTTP 请求 / 响应对象，承载 gin 绑定规则（`binding` 标签）、字段校验、Swagger 注解与中文注释，统一响应信封为 `{code, message, data}`。
-- `internal/service`：领域层输入 / 输出，不感知 HTTP 与绑定。
-- `handler`：负责 `dto` ↔ `service` 的显式转换（`ToServiceInput` / `From*`）。
-
-每个请求 / 响应字段均带中文注释；必填与枚举通过 `binding` 标签声明（如 `required`、`oneof`、`dive`）。
-
 ## Swagger 文档
 
-启动后端后访问交互式文档：<http://localhost:8080/swagger/index.html>
+本地鉴权关闭时访问：<http://localhost:8080/swagger/index.html>。
 
-修改注解后重新生成（需先 `go install github.com/swaggo/swag/cmd/swag@latest`）：
+生产鉴权开启后 `/swagger/*` 需要 Admin Bearer Token。浏览器直接打开 Swagger UI 无法方便注入 Header 时，建议通过受控反向代理访问或临时在可信本地环境关闭鉴权进行文档调试。
+
+修改注解后重新生成：
 
 ```bash
 cd backend
+go install github.com/swaggo/swag/cmd/swag@latest
 swag init -g cmd/api/main.go --parseInternal --parseDependency -o docs
 ```
 
-生成产物位于 `backend/docs/`（`swagger.json` / `swagger.yaml` / `docs.go`），已随仓库提交。
-
 ## 测试
 
+CI 使用真实 Redis + MySQL 服务执行集成测试。由于多个 Go package 共用测试数据库，CI 串行执行 package：
+
 ```bash
-cd backend && go test ./...
+cd backend
+go test -p 1 ./...
 ```
 
-纯逻辑单元测试覆盖维度拼接（`dimension`）和排序分编码（`score`）。
+覆盖重点包括：大分数同分排序、Redis Streams pending、revision 防回退、MySQL → Redis 恢复、原子写入与幂等、查询不隐式建子榜、Admin / Writer 鉴权。
 
 ## CI/CD
 
-仓库新增两条 GitHub Actions 流水线：
+- `CI`：Pull Request 与 `push main` 执行后端测试、前端构建、前后端 Docker 镜像构建。
+- `CD`：`main` CI 成功后构建并推送 GHCR 镜像，并通过 SSH 执行生产 Compose 部署。
 
-- `CI`：在 `pull_request` 和 `push main` 时执行后端 `go test ./...`，以及前端 `npm ci && npm run build`
-- `CD`：在 `CI` 成功且分支为 `main` 时，构建并推送 `backend` / `frontend` 镜像到 GHCR，然后通过 SSH 登录服务器执行 `docker compose up -d --pull always`
-
-默认镜像名：
-
-- `ghcr.io/<owner>/rankflow-backend:<tag>`
-- `ghcr.io/<owner>/rankflow-frontend:<tag>`
-
-生产部署使用 `docker-compose.prod.yml`，只编排：
-
-- `frontend`：对外提供 HTTP 访问
-- `backend`：只在 Compose 内部暴露 `:8080`
-
-MySQL 和 Redis 走外部服务，通过 GitHub Secrets 注入以下环境变量：
+生产部署使用 `docker-compose.prod.yml`。后端生产环境固定启用鉴权，至少需要：
 
 - `RANKFLOW_MYSQL_DSN`
 - `RANKFLOW_REDIS_ADDR`
 - `RANKFLOW_REDIS_PASSWORD`
 - `RANKFLOW_REDIS_DB`
 - `RANKFLOW_PERSIST_WORKERS`
+- `RANKFLOW_ADMIN_TOKEN`（必填）
+- `RANKFLOW_WRITER_TOKEN`（必填，且必须与 Admin Token 不同）
 
-部署前需要在 GitHub 仓库中配置这些 Secrets：
+GitHub 仓库还需配置部署 Secrets：
 
 - `DEPLOY_HOST`
 - `DEPLOY_PORT`
@@ -158,12 +209,6 @@ MySQL 和 Redis 走外部服务，通过 GitHub Secrets 注入以下环境变量
 - `GHCR_USERNAME`
 - `GHCR_PULL_TOKEN`
 - `FRONTEND_PORT`
-- 上述 `RANKFLOW_*` 配置项（其中 `RANKFLOW_MYSQL_DSN`、`RANKFLOW_REDIS_ADDR` 为必填）
+- 上述 `RANKFLOW_*` 配置项
 
-服务器前置要求：
-
-- 已安装 Docker Engine 和 Docker Compose Plugin
-- 部署目录 `DEPLOY_PATH` 已存在且可写
-- 服务器可访问 `ghcr.io`
-- SSH 用户有执行 `docker compose` 的权限
-- 手动触发 `CD` 时也需要从 `main` 分支发起，工作流会拒绝其他分支
+服务器前置要求：Docker Engine + Docker Compose Plugin、部署目录可写、可访问 `ghcr.io`，且 SSH 用户有 Docker Compose 权限。

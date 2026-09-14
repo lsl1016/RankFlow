@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,7 +52,7 @@ func (w *Worker) loop(ctx context.Context, id int) {
 			w.log.Info("persist worker stopped", zap.Int("worker", id))
 			return
 		}
-		messages, err := w.rd.ReadPersist(ctx, consumer, pending, 2*time.Second)
+		messages, err := w.rd.ReadPersistMessage(ctx, consumer, pending, 2*time.Second)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -68,7 +69,7 @@ func (w *Worker) loop(ctx context.Context, id int) {
 		}
 		for _, msg := range messages {
 			for {
-				ack, retry := w.handle(ctx, msg.Payload)
+				ack, retry := w.handleMessage(ctx, msg)
 				if ack {
 					if err := w.rd.AckPersist(ctx, msg.ID); err != nil {
 						w.log.Error("ack persist message failed", zap.String("messageId", msg.ID), zap.Error(err))
@@ -84,12 +85,74 @@ func (w *Worker) loop(ctx context.Context, id int) {
 	}
 }
 
-// handle returns (ack, retry). Invalid JSON is acknowledged because it can
-// never succeed. Database failures remain unacked and are retried in-place.
-func (w *Worker) handle(ctx context.Context, payload string) (bool, bool) {
-	var job service.PersistJob
-	if err := json.Unmarshal([]byte(payload), &job); err != nil {
-		w.log.Warn("decode persist job failed", zap.Error(err))
+func decodePersistJob(msg redis.PersistStreamMessage) (*service.PersistJob, error) {
+	if msg.Payload != "" {
+		var job service.PersistJob
+		if err := json.Unmarshal([]byte(msg.Payload), &job); err != nil {
+			return nil, err
+		}
+		return &job, nil
+	}
+	if msg.Values["format"] != "v2" {
+		return nil, fmt.Errorf("unsupported persist stream format %q", msg.Values["format"])
+	}
+	parseInt := func(name string) (int64, error) {
+		value := msg.Values[name]
+		if value == "" {
+			return 0, fmt.Errorf("persist stream field %s is required", name)
+		}
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse persist stream field %s: %w", name, err)
+		}
+		return n, nil
+	}
+	rankID, err := parseInt("rankId")
+	if err != nil {
+		return nil, err
+	}
+	score, err := parseInt("score")
+	if err != nil {
+		return nil, err
+	}
+	subScore, err := parseInt("subScore")
+	if err != nil {
+		return nil, err
+	}
+	revision, err := parseInt("revision")
+	if err != nil {
+		return nil, err
+	}
+	eventTime, err := parseInt("eventTime")
+	if err != nil {
+		return nil, err
+	}
+	final, err := strconv.ParseFloat(msg.Values["final"], 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse persist stream field final: %w", err)
+	}
+	if msg.Values["typeId"] == "" || msg.Values["itemId"] == "" {
+		return nil, fmt.Errorf("persist stream typeId and itemId are required")
+	}
+	return &service.PersistJob{
+		RankID:    rankID,
+		TypeID:    msg.Values["typeId"],
+		ItemID:    msg.Values["itemId"],
+		TraceID:   msg.Values["traceId"],
+		Score:     score,
+		SubScore:  subScore,
+		Final:     final,
+		Revision:  revision,
+		EventTime: eventTime,
+	}, nil
+}
+
+// handleMessage returns (ack, retry). Malformed messages are acknowledged
+// because retrying them can never succeed. Database failures remain pending.
+func (w *Worker) handleMessage(ctx context.Context, msg redis.PersistStreamMessage) (bool, bool) {
+	job, err := decodePersistJob(msg)
+	if err != nil {
+		w.log.Warn("decode persist job failed", zap.String("messageId", msg.ID), zap.Error(err))
 		return true, false
 	}
 	if job.TraceID != "" {

@@ -85,14 +85,20 @@ jobs:
           FRONTEND_PORT: ${{ secrets.FRONTEND_PORT }}
           RANKFLOW_MYSQL_DSN: ${{ secrets.RANKFLOW_MYSQL_DSN }}
           RANKFLOW_REDIS_ADDR: ${{ secrets.RANKFLOW_REDIS_ADDR }}
+          RANKFLOW_ADMIN_TOKEN: ${{ secrets.RANKFLOW_ADMIN_TOKEN }}
+          RANKFLOW_WRITER_TOKEN: ${{ secrets.RANKFLOW_WRITER_TOKEN }}
         run: |
           set -eu
-          for name in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PATH DEPLOY_KNOWN_HOSTS DEPLOY_SSH_KEY GHCR_USERNAME GHCR_PULL_TOKEN FRONTEND_PORT RANKFLOW_MYSQL_DSN RANKFLOW_REDIS_ADDR; do
+          for name in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PATH DEPLOY_KNOWN_HOSTS DEPLOY_SSH_KEY GHCR_USERNAME GHCR_PULL_TOKEN FRONTEND_PORT RANKFLOW_MYSQL_DSN RANKFLOW_REDIS_ADDR RANKFLOW_ADMIN_TOKEN RANKFLOW_WRITER_TOKEN; do
             if [ -z "$(eval "printf '%s' \"\${$name}\"")" ]; then
               echo "$name is required" >&2
               exit 1
             fi
           done
+          if [ "$RANKFLOW_ADMIN_TOKEN" = "$RANKFLOW_WRITER_TOKEN" ]; then
+            echo "RANKFLOW_ADMIN_TOKEN and RANKFLOW_WRITER_TOKEN must differ" >&2
+            exit 1
+          fi
 
       - name: Prepare deployment files
         run: |
@@ -107,6 +113,8 @@ jobs:
           RANKFLOW_REDIS_PASSWORD=${{ secrets.RANKFLOW_REDIS_PASSWORD }}
           RANKFLOW_REDIS_DB=${{ secrets.RANKFLOW_REDIS_DB }}
           RANKFLOW_PERSIST_WORKERS=${{ secrets.RANKFLOW_PERSIST_WORKERS }}
+          RANKFLOW_ADMIN_TOKEN=${{ secrets.RANKFLOW_ADMIN_TOKEN }}
+          RANKFLOW_WRITER_TOKEN=${{ secrets.RANKFLOW_WRITER_TOKEN }}
           EOF
           chmod 600 .env.prod
 
