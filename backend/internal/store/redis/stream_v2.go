@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -38,12 +37,7 @@ func (s *Store) ReadPersistMessage(ctx context.Context, consumer string, pending
 	out := make([]PersistStreamMessage, 0, 1)
 	for _, stream := range streams {
 		for _, msg := range stream.Messages {
-			item := PersistStreamMessage{ID: msg.ID, Values: map[string]string{}}
-			for key, value := range msg.Values {
-				item.Values[key] = fmt.Sprint(value)
-			}
-			item.Payload = item.Values["payload"]
-			out = append(out, item)
+			out = append(out, persistStreamMessageFromRedis(msg))
 		}
 	}
 	return out, nil

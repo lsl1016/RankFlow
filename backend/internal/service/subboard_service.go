@@ -13,6 +13,8 @@ import (
 	"rankflow/internal/store/mysql"
 )
 
+const subBoardStatusCacheTTL = 5 * time.Minute
+
 type SubBoard struct {
 	RankID      int64             `json:"rankId"`
 	TypeID      string            `json:"typeId"`
@@ -34,7 +36,12 @@ func (s *Service) ResolveSubBoard(ctx context.Context, rankID int64, dims map[st
 	if err := s.prepareBoard(ctx, rc, rankID, typeID); err != nil {
 		return nil, err
 	}
-	return s.GetSubBoard(ctx, rankID, typeID)
+	sb, err := s.GetSubBoard(ctx, rankID, typeID)
+	if err != nil {
+		return nil, err
+	}
+	s.cacheSubBoardStatus(ctx, rankID, typeID, sb.Status)
+	return sb, nil
 }
 
 func (s *Service) ListSubBoards(ctx context.Context, rankID int64) ([]SubBoard, error) {
@@ -79,9 +86,22 @@ func (s *Service) SetSubBoardStatus(ctx context.Context, rankID int64, typeID st
 		}
 		return err
 	}
+
+	// Delete the old cache entry before changing MySQL. If Redis is currently
+	// unavailable, fail before mutating the source of truth rather than leaving
+	// an old ONLINE cache entry that could temporarily accept writes.
+	if err := s.rd.DelSubBoardStatusCache(ctx, rankID, typeID); err != nil {
+		s.logFailure(ctx, "invalidate sub board status cache failed", err, zap.Int64("rankId", rankID), zap.String("typeId", typeID))
+		return err
+	}
 	if err := s.my.UpdateSubBoardStatus(ctx, rankID, typeID, status); err != nil {
 		s.logFailure(ctx, "update sub board status failed", err, zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.Int("status", status))
 		return err
+	}
+	// The cache was already removed, so a failed refill is safe: the next write
+	// falls back to MySQL instead of observing stale status.
+	if err := s.rd.SetSubBoardStatusCache(ctx, rankID, typeID, status, subBoardStatusCacheTTL); err != nil {
+		s.logger(ctx).Warn("cache sub board status failed", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.Int("status", status), zap.Error(err))
 	}
 	s.logger(ctx).Info("set sub board status succeeded", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.Int("status", status))
 	return nil
@@ -113,20 +133,44 @@ func (s *Service) ensureSubBoard(ctx context.Context, rankID int64, typeID strin
 }
 
 func (s *Service) requireSubBoardOnline(ctx context.Context, rankID int64, typeID string, dims map[string]string) error {
-	if err := s.ensureSubBoard(ctx, rankID, typeID, dims); err != nil {
-		return err
-	}
-	sb, err := s.my.GetSubBoard(ctx, rankID, typeID)
-	if err != nil {
-		if errors.Is(err, mysql.ErrNotFound) {
-			return ErrNotFound
+	status, cached, err := s.rd.GetSubBoardStatusCache(ctx, rankID, typeID)
+	if err == nil && cached {
+		if status != model.StatusOnline {
+			return ErrNotOnline
 		}
+		return nil
+	}
+	if err != nil {
+		s.logger(ctx).Warn("read sub board status cache failed", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.Error(err))
+	}
+
+	// Cache miss: read MySQL once. Only a genuinely missing subboard is
+	// materialized; existing subboards are no longer Upserted on every score
+	// write, so rank_sub_board.updated_at stays metadata rather than write QPS.
+	sb, err := s.my.GetSubBoard(ctx, rankID, typeID)
+	if errors.Is(err, mysql.ErrNotFound) {
+		if err := s.ensureSubBoard(ctx, rankID, typeID, dims); err != nil {
+			return err
+		}
+		// Re-read after the idempotent upsert so a concurrent admin status change
+		// is respected instead of assuming the row is still ONLINE.
+		sb, err = s.my.GetSubBoard(ctx, rankID, typeID)
+	}
+	if err != nil {
 		return err
 	}
+
+	s.cacheSubBoardStatus(ctx, rankID, typeID, sb.Status)
 	if sb.Status != model.StatusOnline {
 		return ErrNotOnline
 	}
 	return nil
+}
+
+func (s *Service) cacheSubBoardStatus(ctx context.Context, rankID int64, typeID string, status int) {
+	if err := s.rd.SetSubBoardStatusCache(ctx, rankID, typeID, status, subBoardStatusCacheTTL); err != nil {
+		s.logger(ctx).Warn("cache sub board status failed", zap.Int64("rankId", rankID), zap.String("typeId", typeID), zap.Int("status", status), zap.Error(err))
+	}
 }
 
 func (s *Service) subBoardFromModel(ctx context.Context, row model.RankSubBoard) (*SubBoard, error) {

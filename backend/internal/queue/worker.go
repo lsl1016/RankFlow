@@ -16,6 +16,11 @@ import (
 	"rankflow/internal/store/redis"
 )
 
+const (
+	persistClaimInterval = 5 * time.Second
+	persistTrimInterval  = time.Minute
+)
+
 type Worker struct {
 	rd  *redis.Store
 	my  *mysql.Store
@@ -46,13 +51,76 @@ func (w *Worker) Run(ctx context.Context, n int) {
 func (w *Worker) loop(ctx context.Context, id int) {
 	consumer := fmt.Sprintf("rankflow-%d", id)
 	w.log.Info("persist worker started", zap.Int("worker", id), zap.String("consumer", consumer))
+
+	// Drain this consumer's own pending entries first after restart. Afterwards,
+	// XAUTOCLAIM periodically scans the whole PEL so entries owned by consumers
+	// that no longer exist are eventually recovered as well.
 	pending := true
+	claimCursor := "0-0"
+	nextClaim := time.Now()
+	nextTrim := time.Now().Add(persistTrimInterval)
+
 	for {
 		if ctx.Err() != nil {
 			w.log.Info("persist worker stopped", zap.Int("worker", id))
 			return
 		}
-		messages, err := w.rd.ReadPersistMessage(ctx, consumer, pending, 2*time.Second)
+
+		if pending {
+			messages, err := w.rd.ReadPersistMessage(ctx, consumer, true, 2*time.Second)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				w.log.Warn("read own pending persist stream failed", zap.Error(err), zap.String("consumer", consumer))
+				time.Sleep(time.Second)
+				continue
+			}
+			if len(messages) == 0 {
+				pending = false
+				continue
+			}
+			w.processMessages(ctx, consumer, messages)
+			continue
+		}
+
+		now := time.Now()
+		if !now.Before(nextClaim) {
+			messages, next, err := w.rd.AutoClaimPersistMessages(
+				ctx,
+				consumer,
+				redis.DefaultPersistClaimMinIdle,
+				claimCursor,
+				redis.DefaultPersistClaimBatch,
+			)
+			nextClaim = now.Add(persistClaimInterval)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				w.log.Warn("auto claim stale persist messages failed", zap.Error(err), zap.String("consumer", consumer))
+			} else {
+				if next == "" {
+					next = "0-0"
+				}
+				claimCursor = next
+				// Continue a multi-page PEL scan immediately instead of waiting for
+				// the next interval. Once Redis returns 0-0, the scan is complete.
+				if claimCursor != "0-0" {
+					nextClaim = time.Now()
+				}
+				if len(messages) > 0 {
+					w.log.Info("claimed stale persist messages",
+						zap.String("consumer", consumer),
+						zap.Int("count", len(messages)),
+					)
+					w.processMessages(ctx, consumer, messages)
+					continue
+				}
+			}
+		}
+
+		messages, err := w.rd.ReadPersistMessage(ctx, consumer, false, 2*time.Second)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -61,26 +129,46 @@ func (w *Worker) loop(ctx context.Context, id int) {
 			time.Sleep(time.Second)
 			continue
 		}
-		if len(messages) == 0 {
-			if pending {
-				pending = false
-			}
-			continue
+		if len(messages) > 0 {
+			w.processMessages(ctx, consumer, messages)
 		}
-		for _, msg := range messages {
-			for {
-				ack, retry := w.handleMessage(ctx, msg)
-				if ack {
-					if err := w.rd.AckPersist(ctx, msg.ID); err != nil {
-						w.log.Error("ack persist message failed", zap.String("messageId", msg.ID), zap.Error(err))
-					}
-					break
+
+		// A single worker performs maintenance to avoid every worker issuing the
+		// same trim. TrimAckedPersist computes a safe MINID boundary and never
+		// removes pending or not-yet-delivered entries.
+		if id == 0 && !time.Now().Before(nextTrim) {
+			removed, err := w.rd.TrimAckedPersist(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
 				}
-				if !retry || ctx.Err() != nil {
-					break
-				}
-				time.Sleep(500 * time.Millisecond)
+				w.log.Warn("trim acknowledged persist stream failed", zap.Error(err))
+			} else if removed > 0 {
+				w.log.Debug("trimmed acknowledged persist stream", zap.Int64("removed", removed))
 			}
+			nextTrim = time.Now().Add(persistTrimInterval)
+		}
+	}
+}
+
+func (w *Worker) processMessages(ctx context.Context, consumer string, messages []redis.PersistStreamMessage) {
+	for _, msg := range messages {
+		for {
+			ack, retry := w.handleMessage(ctx, msg)
+			if ack {
+				if err := w.rd.AckPersist(ctx, msg.ID); err != nil {
+					w.log.Error("ack persist message failed",
+						zap.String("consumer", consumer),
+						zap.String("messageId", msg.ID),
+						zap.Error(err),
+					)
+				}
+				break
+			}
+			if !retry || ctx.Err() != nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }

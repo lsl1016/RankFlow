@@ -11,8 +11,9 @@
 - 原子写入：单次 Redis Lua 同时完成分数、排名索引、revision、幂等结果和 Stream 持久化消息
 - 排名存储：Redis ZSet 实现 TopN、我的排名、周边排名；主分写 ZSet score，同分顺序编码在 member 中，避免大分数 float64 精度丢失
 - 排序：先到优先 / 后到优先 / 自定义二级分，支持升/降序
-- 持久化：Redis Streams Consumer Group 异步落库 MySQL，revision 防止多 Worker 乱序覆盖
+- 持久化：Redis Streams Consumer Group 异步落库 MySQL，revision 防止多 Worker 乱序覆盖；`XAUTOCLAIM` 接管失联 Consumer 的 stale pending，安全 `XTRIM MINID` 回收已完成前缀
 - 恢复：支持旧 ZSet 惰性迁移及 MySQL → Redis 排名重建
+- 写分热路径：子榜状态使用 Redis 缓存，已有子榜不再在每次写分时 Upsert MySQL 元数据
 - API 权限：公开查询、Writer 写分、Admin 配置管理三层隔离
 - 管理后台：榜单列表、新建/编辑、详情页（实时排名 + 概览 + 测试加分）
 - 可观测：结构化访问日志、QPS / 缓存命中率基础指标
@@ -88,6 +89,7 @@ npm run dev
 - Redis ZSet 的 score 只保存业务主分；同分顺序由固定宽度 member 前缀表达，因此不再依赖 `final_score` 小数精度。
 - `final_score` 保留用于兼容展示 / MySQL 落库，不再作为 Redis 排名依据。
 - 查询接口不会创建 `rank_sub_board`。子榜只会由显式 `POST /subboards` 或写分路径物化。
+- 写分时优先读取 Redis 子榜状态缓存；只有 cache miss 才查 MySQL，只有确认子榜不存在时才创建，因此正常热路径不会反复更新 `rank_sub_board.updated_at`。
 
 ## API 权限
 
@@ -136,6 +138,16 @@ Authorization: Bearer <RANKFLOW_ADMIN_TOKEN>
 
 `score/set` 是绝对值覆盖；可不传 `requestId`，如果传入则同样启用幂等冲突检测。
 
+## 异步持久化可靠性
+
+Redis Stream 是 MySQL 最终持久化链路，不作为长期审计日志使用：
+
+- Worker 启动时先恢复自己名下的 pending；运行期间周期性使用 `XAUTOCLAIM` 扫描 stale pending，把已经失联或长时间无响应 Consumer 的消息转移到健康 Worker。
+- MySQL 仍使用 revision 条件写入，因此消息被重新接管、重复投递时不会用旧 revision 覆盖新状态。
+- Worker 定期执行安全 `XTRIM MINID`：如果存在 pending，以最老 pending ID 为边界；如果不存在 pending，以 Consumer Group 的 `last-delivered-id` 为边界。只删除确定已经完成的前缀，不删除 pending 或尚未投递的消息。
+
+这使持久化链路保持 at-least-once 语义，同时避免 Stream 因已 ACK 历史记录长期累积而无限增长。
+
 ## API 速览
 
 | 方法 | 路径 | 说明 |
@@ -181,7 +193,7 @@ cd backend
 go test -p 1 ./...
 ```
 
-覆盖重点包括：大分数同分排序、Redis Streams pending、revision 防回退、MySQL → Redis 恢复、原子写入与幂等、查询不隐式建子榜、Admin / Writer 鉴权。
+覆盖重点包括：大分数同分排序、Redis Streams pending / `XAUTOCLAIM` 接管 / 安全裁剪、revision 防回退、MySQL → Redis 恢复、原子写入与幂等、查询不隐式建子榜、写分热路径不重复 Upsert 子榜、Admin / Writer 鉴权。
 
 ## CI/CD
 
